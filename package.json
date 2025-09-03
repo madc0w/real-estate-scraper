@@ -1,0 +1,30 @@
+{
+	"name": "real-estate-scraper",
+	"version": "1.0.0",
+	"description": "A web scraper for real estate listings",
+	"main": "main.cjs",
+	"type": "commonjs",
+	"scripts": {
+		"start": "node main.cjs",
+		"dev": "node main.cjs"
+	},
+	"dependencies": {
+		"csv-writer": "^1.6.0",
+		"puppeteer": "^23.0.0"
+	},
+	"keywords": [
+		"scraper",
+		"puppeteer",
+		"real-estate"
+	],
+	"author": "",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/madc0w/real-estate-scraper.git"
+	},
+	"bugs": {
+		"url": "https://github.com/madc0w/real-estate-scraper/issues"
+	},
+	"homepage": "https://github.com/madc0w/real-estate-scraper#readme"
+}
