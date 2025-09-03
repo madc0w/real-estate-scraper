@@ -267,7 +267,7 @@ async function scrapeAtHomeLu() {
 				// );
 
 				// Small delay to be respectful to the server
-				await new Promise((resolve) => setTimeout(resolve, 500));
+				await new Promise((resolve) => setTimeout(resolve, 400));
 			} catch (error) {
 				console.error(`Error processing property ${propertyLink}:`, error);
 				// Add empty record to maintain count
