@@ -2,21 +2,20 @@ const puppeteer = require('puppeteer');
 // const fs = require('fs');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 
-const numPages = 500;
-// const numPages = 4;
+const maxPages = 500;
+const maxArea = 800;
+const areaStep = 20;
 
 async function scrapeAtHomeLu() {
 	console.log('Starting scraper for athome.lu...');
 
 	const browser = await puppeteer.launch({
-		headless: true, // Running in headless mode
+		headless: true,
 		defaultViewport: { width: 1920, height: 1080 },
 	});
 
-	// const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 	const allPropertyLinks = new Set(); // Use Set to avoid duplicates
 
-	// Setup CSV writer
 	const csvWriter = createCsvWriter({
 		path: 'out.csv',
 		header: [
@@ -44,12 +43,12 @@ async function scrapeAtHomeLu() {
 			'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 		);
 
-		// Iterate through pages 1-20 and surface areas 20-400
-		for (let area = 1; area <= 400; area++) {
-			for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-				const pageUrl = `https://www.athome.lu/vente/?tr=buy&page=${pageNum}&srf_min=${area}&srf_max=${area}`;
+		for (let area = 1; area <= maxArea; area += areaStep) {
+			for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+				const toArea = area + areaStep - 1;
+				const pageUrl = `https://www.athome.lu/vente/?tr=buy&page=${pageNum}&srf_min=${area}&srf_max=${toArea}`;
 				console.log(
-					`Navigating to page ${pageNum} for area ${area}m²: ${pageUrl}`
+					`Navigating to page ${pageNum} for area ${area} - ${toArea} m²: ${pageUrl}`
 				);
 
 				try {
@@ -63,24 +62,24 @@ async function scrapeAtHomeLu() {
 
 					// Extract all links starting with "/vente/"
 					let propertyLinks = await page.evaluate(() => {
-						const links = document.querySelectorAll('a[href^="/vente/"]');
+						const links = document.querySelectorAll('a');
 						return Array.from(links).map((link) => link.href);
 					});
 
+					// console.log('unfiltered', propertyLinks);
 					propertyLinks = Array.from(propertyLinks).filter((link) => {
 						const urlPattern = /\/id-\d+\.html$/;
 						return urlPattern.test(link);
 					});
+					// console.log('filtered', propertyLinks);
 
-					console.log(
-						`Found ${propertyLinks.length} property links on page ${pageNum} for area ${area}m²`
-					);
+					console.log(`Found ${propertyLinks.length} links on page ${pageNum}`);
 					// console.log(propertyLinks);
 					if (propertyLinks.length === 0) {
 						break;
 					}
-					// Add links to our set
 					propertyLinks.forEach((link) => allPropertyLinks.add(link));
+					console.log(`${allPropertyLinks.size} listings found so far`);
 				} catch (error) {
 					console.error(`Error on page ${pageNum} for area ${area}m²:`, error);
 					continue; // Continue with next page if this one fails
@@ -92,7 +91,7 @@ async function scrapeAtHomeLu() {
 
 		// Now visit each property page and extract data
 		let propertyCount = 0;
-		for (const propertyLink of filteredPropertyLinks) {
+		for (const propertyLink of allPropertyLinks) {
 			propertyCount++;
 			console.log(
 				`Processing property ${propertyCount}/${filteredPropertyLinks.length}: ${propertyLink}`
@@ -105,7 +104,7 @@ async function scrapeAtHomeLu() {
 				});
 
 				// Wait for the page to load completely
-				await new Promise((resolve) => setTimeout(resolve, 1000));
+				await new Promise((resolve) => setTimeout(resolve, 800));
 
 				// Extract property data
 				const propertyInfo = await page.evaluate((url) => {
