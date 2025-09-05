@@ -44,52 +44,51 @@ async function scrapeAtHomeLu() {
 			'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 		);
 
-		// Iterate through pages 1-20
-		for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-			const pageUrl = `https://www.athome.lu/vente/?tr=buy&page=${pageNum}`;
-			console.log(`Navigating to page ${pageNum}: ${pageUrl}`);
-
-			try {
-				await page.goto(pageUrl, {
-					waitUntil: 'networkidle2',
-					timeout: 30000,
-				});
-
-				// Wait for the page to load completely
-				await new Promise((resolve) => setTimeout(resolve, 2000));
-
-				// Extract all links starting with "/vente/"
-				const propertyLinks = await page.evaluate(() => {
-					const links = document.querySelectorAll('a[href^="/vente/"]');
-					return Array.from(links).map((link) => link.href);
-				});
-
+		// Iterate through pages 1-20 and surface areas 20-400
+		for (let area = 1; area <= 400; area++) {
+			for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+				const pageUrl = `https://www.athome.lu/vente/?tr=buy&page=${pageNum}&srf_min=${area}&srf_max=${area}`;
 				console.log(
-					`Found ${propertyLinks.length} property links on page ${pageNum}`
+					`Navigating to page ${pageNum} for area ${area}m²: ${pageUrl}`
 				);
 
-				// Add links to our set
-				propertyLinks.forEach((link) => allPropertyLinks.add(link));
-			} catch (error) {
-				console.error(`Error on page ${pageNum}:`, error);
-				continue; // Continue with next page if this one fails
+				try {
+					await page.goto(pageUrl, {
+						waitUntil: 'networkidle2',
+						timeout: 30000,
+					});
+
+					// Wait for the page to load completely
+					await new Promise((resolve) => setTimeout(resolve, 2000));
+
+					// Extract all links starting with "/vente/"
+					let propertyLinks = await page.evaluate(() => {
+						const links = document.querySelectorAll('a[href^="/vente/"]');
+						return Array.from(links).map((link) => link.href);
+					});
+
+					propertyLinks = Array.from(propertyLinks).filter((link) => {
+						const urlPattern = /\/id-\d+\.html$/;
+						return urlPattern.test(link);
+					});
+
+					console.log(
+						`Found ${propertyLinks.length} property links on page ${pageNum} for area ${area}m²`
+					);
+					// console.log(propertyLinks);
+					if (propertyLinks.length === 0) {
+						break;
+					}
+					// Add links to our set
+					propertyLinks.forEach((link) => allPropertyLinks.add(link));
+				} catch (error) {
+					console.error(`Error on page ${pageNum} for area ${area}m²:`, error);
+					continue; // Continue with next page if this one fails
+				}
 			}
 		}
 
 		console.log(`Total unique property links found: ${allPropertyLinks.size}`);
-
-		// Filter URLs to only include those matching the pattern: https://www.athome.lu/vente/[path]/id-[id].html
-		const filteredPropertyLinks = Array.from(allPropertyLinks).filter(
-			(link) => {
-				const urlPattern =
-					/^https:\/\/www\.athome\.lu\/vente\/.*\/id-\d+\.html$/;
-				return urlPattern.test(link);
-			}
-		);
-
-		console.log(
-			`Filtered to ${filteredPropertyLinks.length} URLs matching pattern (out of ${allPropertyLinks.size} total)`
-		);
 
 		// Now visit each property page and extract data
 		let propertyCount = 0;
