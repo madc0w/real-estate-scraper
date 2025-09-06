@@ -49,7 +49,7 @@ async function scrapeAtHomeLu() {
 				const toArea = area + areaStep - 1;
 				const pageUrl = `https://www.athome.lu/vente/?tr=buy&page=${pageNum}&srf_min=${area}&srf_max=${toArea}`;
 				console.log(
-					`${new Date()} : Navigating to page ${pageNum} for area ${area} - ${toArea} m²: ${pageUrl}`
+					`${new Date().toISOString()} : Navigating to page ${pageNum} for area ${area} - ${toArea} m²: ${pageUrl}`
 				);
 
 				try {
@@ -95,7 +95,7 @@ async function scrapeAtHomeLu() {
 		for (const propertyLink of allPropertyLinks) {
 			propertyCount++;
 			console.log(
-				`${new Date()} : Processing listing ${propertyCount}/${
+				`${new Date().toISOString()} : Processing listing ${propertyCount}/${
 					allPropertyLinks.length
 				}: ${propertyLink}`
 			);
