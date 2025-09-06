@@ -17,8 +17,9 @@ async function scrapeAtHomeLu() {
 	const allPropertyLinks = new Set(); // Use Set to avoid duplicates
 
 	const csvWriter = createCsvWriter({
-		path: 'out.csv',
+		path: 'athome.csv',
 		header: [
+			{ id: 'date', title: 'Date Added' },
 			{ id: 'url', title: 'URL' },
 			{ id: 'priceFrom', title: 'Price From' },
 			{ id: 'priceTo', title: 'Price To' },
@@ -48,7 +49,7 @@ async function scrapeAtHomeLu() {
 				const toArea = area + areaStep - 1;
 				const pageUrl = `https://www.athome.lu/vente/?tr=buy&page=${pageNum}&srf_min=${area}&srf_max=${toArea}`;
 				console.log(
-					`Navigating to page ${pageNum} for area ${area} - ${toArea} m²: ${pageUrl}`
+					`${new Date()} : Navigating to page ${pageNum} for area ${area} - ${toArea} m²: ${pageUrl}`
 				);
 
 				try {
@@ -94,7 +95,9 @@ async function scrapeAtHomeLu() {
 		for (const propertyLink of allPropertyLinks) {
 			propertyCount++;
 			console.log(
-				`Processing property ${propertyCount}/${filteredPropertyLinks.length}: ${propertyLink}`
+				`${new Date()} : Processing listing ${propertyCount}/${
+					allPropertyLinks.length
+				}: ${propertyLink}`
 			);
 
 			try {
@@ -133,6 +136,7 @@ async function scrapeAtHomeLu() {
 						agencyName: '',
 						contactPhone: '',
 						contactEmail: '',
+						date: '',
 					};
 
 					// Price range - try multiple selectors and parse
@@ -257,6 +261,9 @@ async function scrapeAtHomeLu() {
 					return data;
 				}, propertyLink);
 
+				// Add current timestamp
+				propertyInfo.date = new Date().toISOString();
+
 				// Write this property's data immediately to CSV
 				await csvWriter.writeRecords([propertyInfo]);
 				totalRecordsWritten++;
@@ -281,6 +288,7 @@ async function scrapeAtHomeLu() {
 					agencyName: '',
 					contactPhone: '',
 					contactEmail: '',
+					date: new Date().toISOString(),
 				};
 
 				// Write error record immediately to CSV
@@ -294,13 +302,13 @@ async function scrapeAtHomeLu() {
 		}
 
 		console.log(
-			`Scraping completed! Processed ${propertyCount} properties (filtered from ${allPropertyLinks.size} total) and wrote ${totalRecordsWritten} records to out.csv`
+			`Scraping completed! Processed ${propertyCount} properties (filtered from ${allPropertyLinks.size} total) and wrote ${totalRecordsWritten} records to athome.csv`
 		);
 	} catch (error) {
 		console.error('Error occurred:', error);
 	} finally {
 		await browser.close();
-		console.log('Browser closed.');
+		// console.log('Browser closed.');
 	}
 }
 
