@@ -1,13 +1,54 @@
 const puppeteer = require('puppeteer');
-// const fs = require('fs');
+const fs = require('fs');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
+// const createCsvStringifier = require('csv-writer').createObjectCsvStringifier;
 
 const maxPages = 500;
 const maxArea = 800;
 const areaStep = 20;
+const outFileName = 'athome.csv';
+
+async function readExistingUrls() {
+	console.log(`Reading existing URLs from ${outFileName}...`);
+	const existingUrls = new Set();
+
+	try {
+		if (fs.existsSync(outFileName)) {
+			const csvContent = fs.readFileSync(outFileName, 'utf-8');
+			const lines = csvContent.split('\n');
+
+			// Skip header row and process data rows
+			for (let i = 1; i < lines.length; i++) {
+				const line = lines[i].trim();
+				if (line) {
+					// Parse CSV line - URL is the second column (index 1)
+					const columns = line.split(',');
+					if (columns.length > 1) {
+						// Remove quotes if present and clean the URL
+						const url = columns[1].replace(/^"/, '').replace(/"$/, '').trim();
+						if (url && url !== 'URL') {
+							// Skip header if it somehow got through
+							existingUrls.add(url);
+						}
+					}
+				}
+			}
+			console.log(`Found ${existingUrls.size} existing URLs in ${outFileName}`);
+		} else {
+			console.log(`${outFileName} does not exist, will create new file`);
+		}
+	} catch (error) {
+		console.error('Error reading existing CSV file:', error);
+	}
+
+	return existingUrls;
+}
 
 async function scrapeAtHomeLu() {
-	console.log('Starting scraper for athome.lu...');
+	console.log(`Starting scraper for ${outFileName}...`);
+
+	// Read existing URLs to avoid duplicates
+	const existingUrls = await readExistingUrls();
 
 	const browser = await puppeteer.launch({
 		headless: true,
@@ -16,8 +57,11 @@ async function scrapeAtHomeLu() {
 
 	const allPropertyLinks = new Set(); // Use Set to avoid duplicates
 
+	// Check if CSV file exists to determine if we need to write headers
+	const csvExists = fs.existsSync(outFileName);
+
 	const csvWriter = createCsvWriter({
-		path: 'athome.csv',
+		path: outFileName,
 		header: [
 			{ id: 'date', title: 'Date Added' },
 			{ id: 'url', title: 'URL' },
@@ -31,7 +75,10 @@ async function scrapeAtHomeLu() {
 			{ id: 'agencyName', title: 'Agency Name' },
 			{ id: 'contactPhone', title: 'Contact Phone' },
 			{ id: 'contactEmail', title: 'Contact Email' },
+			{ id: 'creationDate', title: 'Creation Date' },
+			{ id: 'updateDate', title: 'Update Date' },
 		],
+		append: csvExists, // Append to existing file if it exists
 	});
 
 	let totalRecordsWritten = 0;
@@ -59,7 +106,7 @@ async function scrapeAtHomeLu() {
 					});
 
 					// Wait for the page to load completely
-					await new Promise((resolve) => setTimeout(resolve, 2000));
+					await new Promise((resolve) => setTimeout(resolve, 800));
 
 					// Extract all links starting with "/vente/"
 					let propertyLinks = await page.evaluate(() => {
@@ -90,13 +137,29 @@ async function scrapeAtHomeLu() {
 
 		console.log(`Total unique property links found: ${allPropertyLinks.size}`);
 
-		// Now visit each property page and extract data
+		// Filter out URLs that already exist in the CSV
+		const newPropertyLinks = Array.from(allPropertyLinks).filter(
+			(link) => !existingUrls.has(link)
+		);
+		console.log(
+			`Found ${newPropertyLinks.length} new URLs to scrape (${existingUrls.size} already exist)`
+		);
+
+		if (newPropertyLinks.length === 0) {
+			console.log(
+				`No new URLs to scrape. All listings already exist in ${outFileName}`
+			);
+			await browser.close();
+			return;
+		}
+
+		// Now visit each NEW property page and extract data
 		let propertyCount = 0;
-		for (const propertyLink of allPropertyLinks) {
+		for (const propertyLink of newPropertyLinks) {
 			propertyCount++;
 			console.log(
 				`${new Date().toISOString()} : Processing listing ${propertyCount}/${
-					allPropertyLinks.length
+					newPropertyLinks.length
 				}: ${propertyLink}`
 			);
 
@@ -109,23 +172,11 @@ async function scrapeAtHomeLu() {
 				// Wait for the page to load completely
 				await new Promise((resolve) => setTimeout(resolve, 800));
 
-				// Extract property data
+				// Extract property data from structured JSON data
 				const propertyInfo = await page.evaluate((url) => {
-					// Helper function to safely get text content
-					const getTextContent = (selector) => {
-						const element = document.querySelector(selector);
-						return element ? element.textContent.trim() : '';
-					};
-
-					// Helper function to get attribute
-					const getAttribute = (selector, attribute) => {
-						const element = document.querySelector(selector);
-						return element ? element.getAttribute(attribute) : '';
-					};
-
-					// Extract data
+					// Initialize data structure
 					const data = {
-						url: url,
+						url,
 						priceFrom: '',
 						priceTo: '',
 						imageUrl: '',
@@ -137,128 +188,232 @@ async function scrapeAtHomeLu() {
 						contactPhone: '',
 						contactEmail: '',
 						date: '',
+						creationDate: '',
+						updateDate: '',
 					};
 
-					// Price range - try multiple selectors and parse
-					const priceText =
-						getTextContent('.property-price') ||
-						getTextContent('.price') ||
-						getTextContent('[class*="price"]') ||
-						getTextContent('.property-details__price');
+					try {
+						// Extract structured data from window.AT_HOME_APP
+						const appData =
+							window.AT_HOME_APP?.preloadedState?.listing?.listing;
 
-					if (priceText) {
-						// Handle French price format like "De 698 914 € à 999 278 €"
-						// Remove spaces and extract numbers with spaces between digits
-						const cleanPriceText = priceText.replace(/\s+/g, ' ').trim();
-
-						// Look for price ranges like "De 698 914 € à 999 278 €"
-						const rangeMatch = cleanPriceText.match(
-							/(\d+(?:\s+\d+)*)\s*€.*?(\d+(?:\s+\d+)*)\s*€/
-						);
-						if (rangeMatch) {
-							// Remove spaces from numbers and convert to integers
-							data.priceFrom = rangeMatch[1].replace(/\s+/g, '');
-							data.priceTo = rangeMatch[2].replace(/\s+/g, '');
-						} else {
-							// Single price - look for any number with potential spaces
-							const singlePriceMatch = cleanPriceText.match(/(\d+(?:\s+\d+)*)/);
-							if (singlePriceMatch) {
-								data.priceFrom = singlePriceMatch[1].replace(/\s+/g, '');
-								// Leave priceTo empty for single prices
-							}
-						}
-					}
-
-					// Image URL - get the main property image, prioritizing div with class "square"
-					data.imageUrl =
-						getAttribute('.square img', 'src') ||
-						getAttribute('[class*="square"] img', 'src') ||
-						getAttribute('.property-image img', 'src') ||
-						getAttribute('.gallery img', 'src') ||
-						getAttribute('[class*="image"] img', 'src') ||
-						getAttribute('img[src*="property"]', 'src');
-
-					// Location
-					const locationText =
-						getTextContent('.property-location') ||
-						getTextContent('.location') ||
-						getTextContent('[class*="location"]') ||
-						getTextContent('.property-address');
-
-					// Remove "à" from the beginning of location
-					if (locationText) {
-						data.location = locationText.replace(/^à\s*/i, '').trim();
-					}
-
-					// Square meters - extract area information and parse
-					const surfaceText =
-						getTextContent('[class*="surface"]') ||
-						getTextContent('[class*="area"]') ||
-						getTextContent('.property-surface') ||
-						document.body.textContent.match(/(\d+(?:\s+\d+)*)\s*m[²2]/)?.[0] ||
-						'';
-
-					if (surfaceText) {
-						// Handle area ranges like "52 m² à 80 m²" or single areas like "75 m²"
-						const cleanSurfaceText = surfaceText.replace(/\s+/g, ' ').trim();
-
-						// Look for area ranges
-						const areaRangeMatch = cleanSurfaceText.match(
-							/(\d+(?:\s+\d+)*)\s*m[²2].*?(\d+(?:\s+\d+)*)\s*m[²2]/
-						);
-						if (areaRangeMatch) {
-							// Remove spaces from numbers
-							data.areaFrom = areaRangeMatch[1].replace(/\s+/g, '');
-							data.areaTo = areaRangeMatch[2].replace(/\s+/g, '');
-						} else {
-							// Single area
-							const singleAreaMatch = cleanSurfaceText.match(
-								/(\d+(?:\s+\d+)*)\s*m[²2]/
+						if (!appData) {
+							console.log(
+								'No structured data found, falling back to DOM scraping'
 							);
-							if (singleAreaMatch) {
-								data.areaFrom = singleAreaMatch[1].replace(/\s+/g, '');
-								// Leave areaTo empty for single areas
+							throw new Error('No structured data available');
+						}
+
+						// Price information
+						if (appData.price) {
+							data.priceFrom = appData.price.toString();
+							// For ranges, we'd need to check if there are min/max values
+							// but typically athome.lu shows single prices
+						}
+
+						// Image URL - get first photo
+						if (appData.media?.photos && appData.media.photos.length > 0) {
+							// The photos array contains relative paths, need to construct full URL
+							data.imageUrl =
+								'https://static.athome.lu' + appData.media.photos[0];
+						}
+
+						// Location - construct from address object
+						if (appData.address) {
+							const addr = appData.address;
+							const locationParts = [];
+							if (addr.street) locationParts.push(addr.street);
+							if (addr.city) locationParts.push(addr.city);
+							if (addr.zip) locationParts.push(addr.zip);
+							data.location = locationParts.join(', ');
+						}
+
+						// Area/Surface information
+						if (appData.characteristic?.surface) {
+							data.areaFrom = appData.characteristic.surface.toString();
+						}
+
+						// Description
+						if (appData.description) {
+							data.description = appData.description.replace(/\n/g, ' ').trim();
+						}
+
+						// Agency information
+						if (appData.contact) {
+							data.agencyName = appData.contact.name || '';
+
+							// Phone - prefer mobile, fallback to regular phone
+							data.contactPhone =
+								appData.contact.mobilePhone || appData.contact.phone || '';
+
+							// Email
+							data.contactEmail = appData.contact.email || '';
+
+							// If we have agent info, prefer agent's contact details
+							if (appData.contact.agent) {
+								if (appData.contact.agent.email) {
+									data.contactEmail = appData.contact.agent.email;
+								}
+								if (appData.contact.agent.mobilePhone) {
+									data.contactPhone = appData.contact.agent.mobilePhone;
+								}
 							}
 						}
-					}
 
-					// Description
-					data.description =
-						getTextContent('.property-description') ||
-						getTextContent('.description') ||
-						getTextContent('[class*="description"]') ||
-						getTextContent('.property-details__description');
-
-					// Agency name
-					data.agencyName = getTextContent('.agency-details__name');
-
-					// Contact phone
-					data.contactPhone =
-						getTextContent('[class*="phone"]') ||
-						getTextContent('[href^="tel:"]') ||
-						getTextContent('.contact-phone') ||
-						document.body.textContent.match(
-							/(\+?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3})/
-						)?.[0] ||
-						'';
-
-					// Contact email
-					data.contactEmail =
-						getTextContent('[href^="mailto:"]') ||
-						getAttribute('[href^="mailto:"]', 'href')?.replace('mailto:', '') ||
-						document.body.textContent.match(
-							/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/
-						)?.[0] ||
-						'';
-
-					// Clean up the data
-					Object.keys(data).forEach((key) => {
-						if (typeof data[key] === 'string') {
-							data[key] = data[key].replace(/\s+/g, ' ').trim();
+						// Creation and update dates
+						if (appData.createdAt) {
+							data.creationDate = appData.createdAt;
 						}
-					});
+						if (appData.updatedAt) {
+							data.updateDate = appData.updatedAt;
+						}
 
-					return data;
+						console.log('Successfully extracted structured data');
+						return data;
+					} catch (error) {
+						console.log(
+							'Structured data extraction failed, falling back to DOM scraping:',
+							error.message
+						);
+
+						// Fallback to original DOM scraping method
+						function getTextContent(selector) {
+							return document.querySelector(selector)?.textContent.trim() || '';
+						}
+
+						function getAttribute(selector, attr) {
+							return document.querySelector(selector)?.getAttribute(attr) || '';
+						}
+
+						// Price range - try multiple selectors and parse
+						const priceText =
+							getTextContent('.property-price') ||
+							getTextContent('.price') ||
+							getTextContent('[class*="price"]') ||
+							getTextContent('.property-details__price');
+
+						if (priceText) {
+							const cleanPriceText = priceText.replace(/\s+/g, ' ').trim();
+							const rangeMatch = cleanPriceText.match(
+								/(\d+(?:\s+\d+)*)\s*€.*?(\d+(?:\s+\d+)*)\s*€/
+							);
+							if (rangeMatch) {
+								data.priceFrom = rangeMatch[1].replace(/\s+/g, '');
+								data.priceTo = rangeMatch[2].replace(/\s+/g, '');
+							} else {
+								const singlePriceMatch =
+									cleanPriceText.match(/(\d+(?:\s+\d+)*)/);
+								if (singlePriceMatch) {
+									data.priceFrom = singlePriceMatch[1].replace(/\s+/g, '');
+								}
+							}
+						}
+
+						// Image URL
+						data.imageUrl =
+							getAttribute('.square img', 'src') ||
+							getAttribute('[class*="square"] img', 'src') ||
+							getAttribute('.property-image img', 'src') ||
+							getAttribute('.gallery img', 'src') ||
+							getAttribute('[class*="image"] img', 'src') ||
+							getAttribute('img[src*="property"]', 'src');
+
+						// Location
+						const locationText =
+							getTextContent('.property-location') ||
+							getTextContent('.location') ||
+							getTextContent('[class*="location"]') ||
+							getTextContent('.property-address');
+
+						if (locationText) {
+							data.location = locationText.replace(/^à\s*/i, '').trim();
+						}
+
+						// Square meters
+						const surfaceText =
+							getTextContent('[class*="surface"]') ||
+							getTextContent('[class*="area"]') ||
+							getTextContent('.property-surface') ||
+							document.body.textContent.match(
+								/(\d+(?:\s+\d+)*)\s*m[²2]/
+							)?.[0] ||
+							'';
+
+						if (surfaceText) {
+							const cleanSurfaceText = surfaceText.replace(/\s+/g, ' ').trim();
+							const areaRangeMatch = cleanSurfaceText.match(
+								/(\d+(?:\s+\d+)*)\s*m[²2].*?(\d+(?:\s+\d+)*)\s*m[²2]/
+							);
+							if (areaRangeMatch) {
+								data.areaFrom = areaRangeMatch[1].replace(/\s+/g, '');
+								data.areaTo = areaRangeMatch[2].replace(/\s+/g, '');
+							} else {
+								const singleAreaMatch = cleanSurfaceText.match(
+									/(\d+(?:\s+\d+)*)\s*m[²2]/
+								);
+								if (singleAreaMatch) {
+									data.areaFrom = singleAreaMatch[1].replace(/\s+/g, '');
+								}
+							}
+						}
+
+						// Description
+						data.description =
+							getTextContent('.property-description') ||
+							getTextContent('.description') ||
+							getTextContent('[class*="description"]') ||
+							getTextContent('.property-details__description');
+
+						// Agency name
+						data.agencyName = getTextContent('.agency-details__name');
+
+						// Contact phone
+						data.contactPhone =
+							getTextContent('[class*="phone"]') ||
+							getTextContent('[href^="tel:"]') ||
+							getTextContent('.contact-phone') ||
+							document.body.textContent.match(
+								/(\+?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3})/
+							)?.[0] ||
+							'';
+
+						// Contact email - try specific selectors first
+						data.contactEmail =
+							getAttribute('a[href^="mailto:"]', 'href')?.replace(
+								'mailto:',
+								''
+							) ||
+							getTextContent('a[href^="mailto:"]') ||
+							getTextContent('[class*="email"]') ||
+							getTextContent('.contact-email') ||
+							getTextContent('.agency-email') ||
+							(() => {
+								const emailMatches = document.body.textContent.match(
+									/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g
+								);
+								return emailMatches ? emailMatches[0] : '';
+							})() ||
+							'';
+
+						// Clean up email
+						if (data.contactEmail) {
+							const emailMatch = data.contactEmail.match(
+								/^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/
+							);
+							if (emailMatch) {
+								data.contactEmail = emailMatch[1];
+							}
+						}
+
+						// Clean up the data
+						Object.keys(data).forEach((key) => {
+							if (typeof data[key] === 'string') {
+								data[key] = data[key].replace(/\s+/g, ' ').trim();
+							}
+						});
+
+						return data;
+					}
 				}, propertyLink);
 
 				// Add current timestamp
@@ -289,6 +444,8 @@ async function scrapeAtHomeLu() {
 					contactPhone: '',
 					contactEmail: '',
 					date: new Date().toISOString(),
+					creationDate: '',
+					updateDate: '',
 				};
 
 				// Write error record immediately to CSV
@@ -302,7 +459,7 @@ async function scrapeAtHomeLu() {
 		}
 
 		console.log(
-			`Scraping completed! Processed ${propertyCount} properties (filtered from ${allPropertyLinks.size} total) and wrote ${totalRecordsWritten} records to athome.csv`
+			`Scraping completed! Processed ${propertyCount} new properties (filtered from ${allPropertyLinks.size} total) and wrote ${totalRecordsWritten} records to ${outFileName}`
 		);
 	} catch (error) {
 		console.error('Error occurred:', error);
