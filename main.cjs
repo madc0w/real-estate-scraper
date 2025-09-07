@@ -117,6 +117,7 @@ async function scrapeAtHomeLu() {
 			{ id: 'updateDate', title: 'Update Date' },
 		],
 		append: csvExists, // Append to existing file if it exists
+		encoding: 'utf8', // Ensure proper encoding
 	});
 
 	let totalRecordsWritten = 0;
@@ -172,9 +173,10 @@ async function scrapeAtHomeLu() {
 						break;
 					}
 
-					// for FSBO testing:
+					// for testing:
 					// const filteredLinks = [
-					// 	'https://www.athome.lu/buy/apartment/bertrange/id-8642548.html',
+					// 	// 	'https://www.athome.lu/buy/apartment/bertrange/id-8642548.html', // FSBO
+					// 	'https://www.athome.lu/fr/vente/garage-parking/bertrange/id-8519405.html',
 					// ];
 					const filteredLinks = [];
 					// Track unique IDs
@@ -209,12 +211,13 @@ async function scrapeAtHomeLu() {
 							// Wait for the page to load completely
 							await new Promise((resolve) => setTimeout(resolve, 800));
 
-							page.on('console', (msg) => {
-								console.log(`[PAGE CONSOLE]: ${msg.text()}`);
-							});
-							propertyPage.on('console', (msg) => {
-								console.log(`[PROPERTY PAGE CONSOLE]: ${msg.text()}`);
-							});
+							// for debugging:
+							// page.on('console', (msg) => {
+							// 	console.log(`[PAGE CONSOLE]: ${msg.text()}`);
+							// });
+							// propertyPage.on('console', (msg) => {
+							// 	console.log(`[PROPERTY PAGE CONSOLE]: ${msg.text()}`);
+							// });
 
 							// Extract property data from structured JSON data
 							const propertyInfo = await propertyPage.evaluate((url) => {
@@ -651,8 +654,20 @@ async function scrapeAtHomeLu() {
 								}
 							}, propertyLink);
 
-							// Add current timestamp
+							// Add current timestamp and clean data before writing
 							propertyInfo.date = new Date().toISOString();
+
+							// Clean up the data to prevent CSV issues
+							Object.keys(propertyInfo).forEach((key) => {
+								if (typeof propertyInfo[key] === 'string') {
+									// Remove line breaks, excessive whitespace, and clean up quotes
+									propertyInfo[key] = propertyInfo[key]
+										.replace(/\r?\n/g, ' ')
+										.replace(/\s+/g, ' ')
+										.replace(/"/g, '""') // Escape quotes properly for CSV
+										.trim();
+								}
+							});
 
 							// Write this property's data immediately to CSV
 							await csvWriter.writeRecords([propertyInfo]);
@@ -667,6 +682,7 @@ async function scrapeAtHomeLu() {
 							);
 							// Add empty record to maintain count
 							const errorRecord = {
+								date: new Date().toISOString(),
 								url: propertyLink,
 								priceFrom: 'ERROR',
 								priceTo: '',
@@ -679,7 +695,6 @@ async function scrapeAtHomeLu() {
 								contactPhone: '',
 								contactEmail: '',
 								fsbo: '',
-								date: new Date().toISOString(),
 								creationDate: '',
 								updateDate: '',
 							};
