@@ -151,7 +151,7 @@ async function scrapeAtHomeLu() {
 					});
 
 					// Wait for the page to load completely
-					await new Promise((resolve) => setTimeout(resolve, 400));
+					await new Promise((resolve) => setTimeout(resolve, 800));
 
 					// Extract all links starting with "/vente/"
 					let propertyLinks = await page.evaluate(() => {
@@ -172,12 +172,11 @@ async function scrapeAtHomeLu() {
 						break;
 					}
 
-					// FSBO test:
+					// for FSBO testing:
 					// const filteredLinks = [
 					// 	'https://www.athome.lu/buy/apartment/bertrange/id-8642548.html',
 					// ];
 					const filteredLinks = [];
-
 					// Track unique IDs
 					propertyLinks.forEach((link) => {
 						const idMatch = link.match(/\/id-(\d+)\.html$/);
@@ -208,7 +207,14 @@ async function scrapeAtHomeLu() {
 							});
 
 							// Wait for the page to load completely
-							await new Promise((resolve) => setTimeout(resolve, 400));
+							await new Promise((resolve) => setTimeout(resolve, 800));
+
+							page.on('console', (msg) => {
+								console.log(`[PAGE CONSOLE]: ${msg.text()}`);
+							});
+							propertyPage.on('console', (msg) => {
+								console.log(`[PROPERTY PAGE CONSOLE]: ${msg.text()}`);
+							});
 
 							// Extract property data from structured JSON data
 							const propertyInfo = await propertyPage.evaluate((url) => {
@@ -340,33 +346,59 @@ async function scrapeAtHomeLu() {
 										}
 									}
 
-									// Now specifically look for divs with private-* classes
-									const privateDivs = document.querySelectorAll(
-										'div[class*="private-"]'
+									// FSBO detection - only mark as FSBO if it's actually a private seller
+									// Look for private class indicators
+									const privateElements = document.querySelectorAll(
+										'[class*="private-"]'
 									);
-
-									if (privateDivs.length > 0) {
-										// Found div elements with private-* classes, extract the class name
-										for (const div of privateDivs) {
-											const classes = div.className.split(' ');
-											for (const className of classes) {
+									if (privateElements.length > 0) {
+										// Found elements with private-* classes, extract the class name
+										for (let element of privateElements) {
+											const classes = element.className.split(' ');
+											for (let className of classes) {
 												if (className.startsWith('private-')) {
-													data.fsbo = className;
+													data.fsbo = element.innerText.trim();
 													break;
 												}
 											}
 											if (data.fsbo) break;
 										}
-									}
 
-									// Also try a broader search for any element with private-opposed-agencies-requests
-									if (!data.fsbo) {
-										const specificElement = document.querySelector(
-											'.private-opposed-agencies-requests, [class*="private-opposed-agencies-requests"]'
-										);
-										if (specificElement) {
-											data.fsbo = 'private-opposed-agencies-requests';
-										}
+										// // Only check for "Particulier" in specific seller context, not in descriptions
+										// if (!data.fsbo) {
+										// 	// Look for "Particulier" specifically in seller/contact sections
+										// 	const sellerSections = document.querySelectorAll(
+										// 		'[class*="seller"], [class*="contact"], [class*="agency"], [class*="author"], [id*="contact"], [id*="seller"]'
+										// 	);
+
+										// 	for (let section of sellerSections) {
+										// 		const sectionText = section.textContent;
+										// 		if (
+										// 			sectionText.includes('Particulier') ||
+										// 			sectionText.includes('particulier')
+										// 		) {
+										// 			// Make sure it's actually indicating private seller, not just containing the word
+										// 			if (
+										// 				sectionText
+										// 					.toLowerCase()
+										// 					.includes('vendu par particulier') ||
+										// 				sectionText
+										// 					.toLowerCase()
+										// 					.includes('vendeur particulier') ||
+										// 				sectionText
+										// 					.toLowerCase()
+										// 					.includes('annonce particulier') ||
+										// 				(sectionText
+										// 					.toLowerCase()
+										// 					.includes('particulier') &&
+										// 					sectionText.toLowerCase().includes('contact'))
+										// 			) {
+										// 				data.fsbo = 'particulier';
+										// 				break;
+										// 			}
+										// 		}
+										// 	}
+										// }
 									}
 
 									// Creation and update dates
@@ -377,6 +409,7 @@ async function scrapeAtHomeLu() {
 										data.updateDate = appData.updatedAt;
 									}
 
+									console.log('Successfully extracted structured data');
 									return data;
 								} catch (error) {
 									console.log(
@@ -552,35 +585,59 @@ async function scrapeAtHomeLu() {
 										}
 									}
 
-									// FSBO detection for fallback method - look for div with class name like "private-*"
+									// FSBO detection for fallback method - only mark as FSBO if it's actually a private seller
 
-									// Now specifically look for divs with private-* classes
-									const privateDivs = document.querySelectorAll(
-										'div[class*="private-"]'
+									const privateElements = document.querySelectorAll(
+										'[class*="private-"]'
 									);
-
-									if (privateDivs.length > 0) {
-										// Found div elements with private-* classes, extract the class name
-										for (const div of privateDivs) {
-											const classes = div.className.split(' ');
-											for (const className of classes) {
+									if (privateElements.length > 0) {
+										// Found elements with private-* classes, extract the class name
+										for (let element of privateElements) {
+											const classes = element.className.split(' ');
+											for (let className of classes) {
 												if (className.startsWith('private-')) {
-													data.fsbo = className;
+													data.fsbo = element.innerText.trim();
 													break;
 												}
 											}
 											if (data.fsbo) break;
 										}
-									}
 
-									// Also try a broader search for any element with private-opposed-agencies-requests
-									if (!data.fsbo) {
-										const specificElement = document.querySelector(
-											'.private-opposed-agencies-requests, [class*="private-opposed-agencies-requests"]'
-										);
-										if (specificElement) {
-											data.fsbo = 'private-opposed-agencies-requests';
-										}
+										// // Only check for "Particulier" in specific seller context, not in descriptions
+										// if (!data.fsbo) {
+										// 	// Look for "Particulier" specifically in seller/contact sections
+										// 	const sellerSections = document.querySelectorAll(
+										// 		'[class*="seller"], [class*="contact"], [class*="agency"], [class*="author"], [id*="contact"], [id*="seller"]'
+										// 	);
+
+										// 	for (let section of sellerSections) {
+										// 		const sectionText = section.textContent;
+										// 		if (
+										// 			sectionText.includes('Particulier') ||
+										// 			sectionText.includes('particulier')
+										// 		) {
+										// 			// Make sure it's actually indicating private seller, not just containing the word
+										// 			if (
+										// 				sectionText
+										// 					.toLowerCase()
+										// 					.includes('vendu par particulier') ||
+										// 				sectionText
+										// 					.toLowerCase()
+										// 					.includes('vendeur particulier') ||
+										// 				sectionText
+										// 					.toLowerCase()
+										// 					.includes('annonce particulier') ||
+										// 				(sectionText
+										// 					.toLowerCase()
+										// 					.includes('particulier') &&
+										// 					sectionText.toLowerCase().includes('contact'))
+										// 			) {
+										// 				data.fsbo = 'particulier';
+										// 				break;
+										// 			}
+										// 		}
+										// 	}
+										// }
 									}
 
 									// Clean up the data
