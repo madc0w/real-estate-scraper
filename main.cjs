@@ -172,7 +172,12 @@ async function scrapeAtHomeLu() {
 						break;
 					}
 
+					// FSBO test:
+					// const filteredLinks = [
+					// 	'https://www.athome.lu/buy/apartment/bertrange/id-8642548.html',
+					// ];
 					const filteredLinks = [];
+
 					// Track unique IDs
 					propertyLinks.forEach((link) => {
 						const idMatch = link.match(/\/id-(\d+)\.html$/);
@@ -335,21 +340,32 @@ async function scrapeAtHomeLu() {
 										}
 									}
 
-									// FSBO detection - look for div with class name like "private-*"
+									// Now specifically look for divs with private-* classes
 									const privateDivs = document.querySelectorAll(
 										'div[class*="private-"]'
 									);
+
 									if (privateDivs.length > 0) {
 										// Found div elements with private-* classes, extract the class name
-										for (let div of privateDivs) {
+										for (const div of privateDivs) {
 											const classes = div.className.split(' ');
-											for (let className of classes) {
+											for (const className of classes) {
 												if (className.startsWith('private-')) {
 													data.fsbo = className;
 													break;
 												}
 											}
 											if (data.fsbo) break;
+										}
+									}
+
+									// Also try a broader search for any element with private-opposed-agencies-requests
+									if (!data.fsbo) {
+										const specificElement = document.querySelector(
+											'.private-opposed-agencies-requests, [class*="private-opposed-agencies-requests"]'
+										);
+										if (specificElement) {
+											data.fsbo = 'private-opposed-agencies-requests';
 										}
 									}
 
@@ -361,7 +377,6 @@ async function scrapeAtHomeLu() {
 										data.updateDate = appData.updatedAt;
 									}
 
-									console.log('Successfully extracted structured data');
 									return data;
 								} catch (error) {
 									console.log(
@@ -538,20 +553,33 @@ async function scrapeAtHomeLu() {
 									}
 
 									// FSBO detection for fallback method - look for div with class name like "private-*"
+
+									// Now specifically look for divs with private-* classes
 									const privateDivs = document.querySelectorAll(
 										'div[class*="private-"]'
 									);
+
 									if (privateDivs.length > 0) {
 										// Found div elements with private-* classes, extract the class name
-										for (let div of privateDivs) {
+										for (const div of privateDivs) {
 											const classes = div.className.split(' ');
-											for (let className of classes) {
+											for (const className of classes) {
 												if (className.startsWith('private-')) {
 													data.fsbo = className;
 													break;
 												}
 											}
 											if (data.fsbo) break;
+										}
+									}
+
+									// Also try a broader search for any element with private-opposed-agencies-requests
+									if (!data.fsbo) {
+										const specificElement = document.querySelector(
+											'.private-opposed-agencies-requests, [class*="private-opposed-agencies-requests"]'
+										);
+										if (specificElement) {
+											data.fsbo = 'private-opposed-agencies-requests';
 										}
 									}
 
