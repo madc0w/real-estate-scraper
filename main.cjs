@@ -75,14 +75,6 @@ function parseCSVLine(line) {
 	return fields;
 }
 
-function normalizeUrl(url) {
-	// Remove language prefix from URL to normalize for duplicate detection
-	return url
-		.replace(/\/fr\//, '/')
-		.replace(/\/en\//, '/')
-		.replace(/\/de\//, '/');
-}
-
 async function scrapeAtHomeLu() {
 	console.log(`Starting scraper for ${outFileName}...`);
 
@@ -137,7 +129,7 @@ async function scrapeAtHomeLu() {
 			'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 		);
 
-		for (let area = 1; area <= maxArea; area += areaStep) {
+		for (let area = 0; area <= maxArea; area += areaStep) {
 			for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
 				const toArea = area + areaStep - 1;
 				const pageUrl = `https://www.athome.lu/vente/?tr=buy&page=${pageNum}&srf_min=${area}&srf_max=${toArea}`;
