@@ -3,10 +3,10 @@ const fs = require('fs');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 // const createCsvStringifier = require('csv-writer').createObjectCsvStringifier;
 
-const maxPages = 500;
-const maxArea = 800;
+const maxArea = 1200;
 const areaStep = 20;
 const outFileName = 'athome.csv';
+const maxPages = 500;
 
 const ids = new Set();
 
