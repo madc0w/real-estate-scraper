@@ -3,25 +3,65 @@ const path = require('path');
 
 // Read and parse CSV data
 function parseCSV(filePath) {
-	const csvContent = fs.readFileSync(filePath, 'utf-8');
+	// Read the file as binary first to handle encoding properly
+	const buffer = fs.readFileSync(filePath);
+
+	// Convert buffer to string, handling UTF-8 BOM if present
+	let csvContent = buffer.toString('utf8');
+
+	// Remove BOM if present
+	if (csvContent.charCodeAt(0) === 0xfeff) {
+		csvContent = csvContent.substr(1);
+	}
 	const lines = csvContent.split('\n');
-	const headers = lines[0].split(',');
+	const headers = lines[0].split(',').map((h) => h.trim());
 
 	const data = [];
-	for (let i = 1; i < 20; i++) {
-		// Process first 20 lines for testing
+	for (let i = 1; i < lines.length; i++) {
+		// for (let i = 1; i < 100; i++) {
 		if (lines[i].trim()) {
 			const values = parseCSVLine(lines[i]);
-			if (values.length === headers.length) {
+			if (values.length >= headers.length - 2) {
+				// Allow for missing lat/lng columns
 				const row = {};
 				headers.forEach((header, index) => {
-					row[header.trim()] = values[index];
+					row[header] = values[index] || ''; // Default to empty string if missing
 				});
 				data.push(row);
 			}
 		}
 	}
 	return data;
+}
+
+// Save updated CSV data with geocoded coordinates
+function saveCSVWithCoordinates(filePath, data, originalHeaders) {
+	// Ensure latitude and longitude headers exist
+	const headers = [...originalHeaders];
+	if (!headers.includes('latitude')) {
+		headers.push('latitude');
+	}
+	if (!headers.includes('longitude')) {
+		headers.push('longitude');
+	}
+
+	// Create CSV content
+	const csvLines = [headers.join(',')];
+
+	data.forEach((row) => {
+		const values = headers.map((header) => {
+			let value = row[header] || '';
+			// Escape commas and quotes in values
+			if (value.toString().includes(',') || value.toString().includes('"')) {
+				value = `"${value.toString().replace(/"/g, '""')}"`;
+			}
+			return value;
+		});
+		csvLines.push(values.join(','));
+	});
+
+	fs.writeFileSync(filePath, csvLines.join('\n'), 'utf-8');
+	console.log(`Updated CSV file saved: ${filePath}`);
 }
 
 // Parse CSV line handling quoted values
@@ -61,7 +101,7 @@ function filterProperties(data) {
 			priceFrom > 0 &&
 			(!priceTo || priceTo.trim() === '') &&
 			!isNaN(areaFrom) &&
-			areaFrom > 0 &&
+			areaFrom > 20 &&
 			(!areaTo || areaTo.trim() === '')
 		);
 	});
@@ -83,47 +123,465 @@ function calculateCostPerSqM(properties) {
 	});
 }
 
-// Geocode address using Nominatim OpenStreetMap API with Luxembourg-specific optimizations
+// Helper function to clean address
+function cleanAddressText(address, preserveReplacementChars = false) {
+	let result = address
+		.normalize('NFD') // Decompose accented characters
+		.replace(/[\u0300-\u036f]/g, '') // Remove combining diacritical marks
+		// Handle specific characters that don't decompose properly
+		.replace(/[àáâãäåæ]/g, 'a')
+		.replace(/[èéêë]/g, 'e')
+		.replace(/[ìíîï]/g, 'i')
+		.replace(/[òóôõöø]/g, 'o')
+		.replace(/[ùúûü]/g, 'u')
+		.replace(/[ýÿ]/g, 'y')
+		.replace(/[ñ]/g, 'n')
+		.replace(/[ç]/g, 'c')
+		.replace(/[ß]/g, 'ss')
+		.replace(/[ÀÁÂÃÄÅÆ]/g, 'A')
+		.replace(/[ÈÉÊË]/g, 'E')
+		.replace(/[ÌÍÎÏ]/g, 'I')
+		.replace(/[ÒÓÔÕÖØ]/g, 'O')
+		.replace(/[ÙÚÛÜ]/g, 'U')
+		.replace(/[ÝŸ]/g, 'Y')
+		.replace(/[Ñ]/g, 'N')
+		.replace(/[Ç]/g, 'C');
+
+	if (preserveReplacementChars) {
+		// Temporarily replace \uFFFD with a placeholder to preserve it
+		result = result.replace(/\uFFFD/g, '__REPLACEMENT_CHAR__');
+		// Remove other non-ASCII characters
+		result = result.replace(/[^\x00-\x7F_]/g, '');
+		// Restore replacement characters
+		result = result.replace(/__REPLACEMENT_CHAR__/g, '\uFFFD');
+	} else {
+		// Remove all non-ASCII characters including replacement chars
+		result = result.replace(/[^\x00-\x7F]/g, '');
+	}
+
+	return (
+		result
+			// Normalize whitespace
+			.replace(/\s+/g, ' ')
+			.trim()
+	);
+}
+
+// Helper function to test if an address can be geocoded
+async function tryGeocode(address) {
+	try {
+		const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+			address
+		)}&limit=1`;
+
+		const response = await new Promise((resolve, reject) => {
+			const request = https.get(url, (res) => {
+				let data = '';
+				res.on('data', (chunk) => (data += chunk));
+				res.on('end', () => resolve({ statusCode: res.statusCode, data }));
+			});
+			request.on('error', reject);
+			request.setTimeout(5000, () => {
+				request.destroy();
+				reject(new Error('Request timeout'));
+			});
+		});
+
+		if (response.statusCode === 200) {
+			const results = JSON.parse(response.data);
+			return results.length > 0 ? results[0] : null;
+		}
+		return null;
+	} catch (error) {
+		return null;
+	}
+}
+
+// Generate all possible combinations for replacement characters with smart ordering
+function generateReplacementCombinations(address) {
+	// Smart substitutions based on context and common patterns
+	function getContextualSubstitutions(address, position) {
+		const surrounding = address
+			.substring(Math.max(0, position - 3), position + 4)
+			.toLowerCase();
+
+		// For French/Belgian place names, prioritize based on common patterns
+		if (surrounding.includes('sur-s') || surrounding.includes('ux-s')) {
+			// "Vaux-sur-S?re" pattern - prioritize 'u' for "Sûre"
+			return ['u', 'e', 'a', 'o', 'i', 'ss'];
+		}
+
+		if (surrounding.includes('strass') || surrounding.includes('stra')) {
+			// German street names - prioritize 'ss' for "Straße"
+			return ['ss', 'e', 'a', 'u', 'o', 'i'];
+		}
+
+		if (surrounding.includes('sch') || surrounding.includes('utr')) {
+			// German words - prioritize 'u' and 'o'
+			return ['u', 'o', 'e', 'a', 'i', 'ss'];
+		}
+
+		// Default order for general cases
+		return ['e', 'a', 'u', 'o', 'i', 'ss'];
+	}
+
+	const replacementPositions = [];
+
+	// Find all positions of replacement characters
+	for (let i = 0; i < address.length; i++) {
+		if (address[i] === '\uFFFD') {
+			replacementPositions.push(i);
+		}
+	}
+
+	if (replacementPositions.length === 0) {
+		return [address];
+	}
+
+	// Generate smart combinations based on context
+	const combinations = [];
+
+	// For single replacement character (most common case), try contextual substitutions
+	if (replacementPositions.length === 1) {
+		const position = replacementPositions[0];
+		const substitutions = getContextualSubstitutions(address, position);
+
+		for (const sub of substitutions) {
+			const result =
+				address.substring(0, position) + sub + address.substring(position + 1);
+			combinations.push(result);
+		}
+
+		return combinations;
+	}
+
+	// For multiple replacement characters, use standard approach but limit combinations
+	const substitutions = ['u', 'e', 'a', 'o', 'i', 'ss']; // Prioritize 'u' and 'e'
+	const maxCombinations = 12; // Limit to prevent excessive API calls
+
+	for (
+		let i = 0;
+		i <
+		Math.min(
+			Math.pow(substitutions.length, replacementPositions.length),
+			maxCombinations
+		);
+		i++
+	) {
+		let result = address;
+		let temp = i;
+
+		// For each replacement position, choose a substitution
+		for (let j = replacementPositions.length - 1; j >= 0; j--) {
+			const subIndex = temp % substitutions.length;
+			temp = Math.floor(temp / substitutions.length);
+
+			// Replace character at this position
+			result =
+				result.substring(0, replacementPositions[j]) +
+				substitutions[subIndex] +
+				result.substring(replacementPositions[j] + 1);
+		}
+
+		combinations.push(result);
+	}
+
+	return combinations;
+}
+
+// Geocode address using Nominatim OpenStreetMap API with improved strategies
 async function geocodeAddress(address) {
 	try {
-		// Clean up the address for better geocoding
-		const cleanAddress = address.replace(/\s+/g, ' ').trim();
+		console.log(`🌍 Starting geocoding for: ${address}`);
 
-		// Try multiple search strategies for Luxembourg addresses
-		const searchStrategies = [
-			// Strategy 1: Original full address
-			cleanAddress,
-			// Strategy 2: Add explicit Luxembourg country constraint
-			`${cleanAddress}, Luxembourg`,
-			// Strategy 3: Parse and reconstruct address for Luxembourg format
-			...parseAndReconstructLuxembourgAddress(cleanAddress),
+		// Step 1: First clean up the address structure (remove administrative levels)
+		const initialVariations = [
+			address,
+			...getCleanedAddressVariations(address),
 		];
 
-		for (let i = 0; i < searchStrategies.length; i++) {
-			const searchAddress = searchStrategies[i];
-			const encodedAddress = encodeURIComponent(searchAddress);
+		// Step 2: For each structural variation, also try character replacements if needed
+		const allVariations = [];
 
-			// Use Nominatim API with Luxembourg-specific parameters
-			const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=3&countrycodes=lu,fr&q=${encodedAddress}`;
+		for (const variation of initialVariations) {
+			// Add the structural variation as-is
+			allVariations.push(variation);
 
-			const result = await makeGeocodingRequest(url, searchAddress);
-			if (result && result.lat && result.lng && result.lat !== 49.6116) {
-				return result;
-			}
+			// If this variation has replacement characters, generate character alternatives
+			if (variation.includes('\uFFFD')) {
+				console.log(`🔄 Found replacement characters in: ${variation}`);
+				const charVariations = generateReplacementCombinations(variation);
+				console.log(
+					`🔄 Generated ${charVariations.length} character combinations`
+				);
 
-			// Small delay between attempts
-			if (i < searchStrategies.length - 1) {
-				await new Promise((resolve) => setTimeout(resolve, 200));
+				// Add character variations, prioritizing the smart ones
+				charVariations.forEach((charVar) => {
+					if (!allVariations.includes(charVar)) {
+						allVariations.push(charVar);
+					}
+				});
 			}
 		}
 
-		// All strategies failed
-		console.log(`Geocoding failed for: ${address}, using Luxembourg center`);
-		return { lat: 49.6116, lng: 6.1319 };
+		// Remove duplicates while preserving order
+		const uniqueVariations = [];
+		const seen = new Set();
+		allVariations.forEach((addr) => {
+			if (!seen.has(addr)) {
+				seen.add(addr);
+				uniqueVariations.push(addr);
+			}
+		});
+
+		console.log(
+			`🔄 Will try ${uniqueVariations.length} total variations (structure + character combinations)`
+		);
+
+		// Detect appropriate country codes for better API results
+		let countryCode = 'lu,fr,de,be,nl'; // Default
+		const addressLower = address.toLowerCase();
+		if (addressLower.includes('belgium')) countryCode = 'be';
+		else if (addressLower.includes('luxembourg')) countryCode = 'lu';
+		else if (addressLower.includes('france')) countryCode = 'fr';
+		else if (addressLower.includes('germany')) countryCode = 'de';
+
+		for (let i = 0; i < uniqueVariations.length; i++) {
+			const searchAddress = uniqueVariations[i];
+
+			// Apply final text cleaning to remove any remaining encoding issues
+			const cleanedSearchAddress = cleanAddressText(searchAddress);
+			const encodedAddress = encodeURIComponent(cleanedSearchAddress);
+
+			console.log(`trying ${encodedAddress}`);
+			// Use Nominatim API with better country filtering
+			const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=3&countrycodes=${countryCode}&q=${encodedAddress}`;
+
+			const result = await makeGeocodingRequest(url, cleanedSearchAddress);
+			if (result?.lat && result?.lng) {
+				console.log(`✅ Success with variation: ${cleanedSearchAddress}`);
+				return result;
+			}
+
+			// Progressive delay between attempts
+			if (i < uniqueVariations.length - 1) {
+				const delay = Math.min(200 + i * 100, 1000);
+				await new Promise((resolve) => setTimeout(resolve, delay));
+			}
+		}
+
+		console.log(
+			`❌ All ${uniqueVariations.length} strategies failed for: ${address}`
+		);
+		return null;
 	} catch (error) {
-		console.log(`Geocoding error for ${address}:`, error.message);
-		return { lat: 49.6116, lng: 6.1319 };
+		console.error(`Geocoding error for ${address}:`, error.message);
+		return null;
 	}
+}
+
+// Generate cleaned address variations by removing problematic prefixes and parts
+function getCleanedAddressVariations(address) {
+	const variations = [];
+
+	// Use the enhanced cleanAddressText that preserves replacement characters
+	const fixedAddress = cleanAddressText(address, true); // true = preserve replacement chars
+
+	const parts = fixedAddress.split(',').map((part) => part.trim());
+
+	if (parts.length >= 2) {
+		// Remove problematic first parts that are likely placeholders or codes
+		const firstPart = parts[0].trim();
+
+		// Common problematic prefixes/codes to remove
+		const problematicPrefixes = [
+			'NC',
+			'N/A',
+			'TBD',
+			'TBA',
+			'UNKNOWN',
+			'NO ADDRESS',
+			'NOT SPECIFIED',
+			'NA',
+			'???',
+			'--',
+			'NULL',
+			'NONE',
+			'X',
+		];
+
+		const shouldRemoveFirst =
+			problematicPrefixes.includes(firstPart.toUpperCase()) ||
+			firstPart.length <= 2 || // Very short parts like "NC"
+			/^[A-Z]{1,3}$/.test(firstPart) || // All caps short codes
+			firstPart === '?';
+
+		if (shouldRemoveFirst) {
+			// Create version without the first part
+			const withoutFirst = parts.slice(1).join(', ');
+			variations.push(withoutFirst);
+			console.log(`Removed problematic prefix "${firstPart}" from address`);
+		}
+
+		// Also try removing empty or very short parts throughout the address
+		const cleanedParts = parts.filter(
+			(part) =>
+				part.length > 2 &&
+				!problematicPrefixes.includes(part.toUpperCase()) &&
+				!/^[A-Z]{1,2}$/.test(part.trim())
+		);
+
+		if (cleanedParts.length !== parts.length && cleanedParts.length >= 2) {
+			variations.push(cleanedParts.join(', '));
+		}
+	}
+
+	// ENHANCED: Belgian address cleanup (the key fix for your issue)
+	if (fixedAddress.toLowerCase().includes('belgium') && parts.length >= 5) {
+		const street = parts[0];
+		const city = parts[1];
+		const postalCode = parts[2];
+
+		// Remove administrative levels (Province, District) - this fixes your specific case
+		variations.push(`${street}, ${city}, ${postalCode}, Belgium`);
+		console.log('🇧🇪 Removed Belgian administrative levels');
+
+		// European postal format
+		if (/^\d{4}$/.test(postalCode)) {
+			variations.push(`${street}, ${postalCode} ${city}, Belgium`);
+		}
+
+		// Fallback: just city
+		variations.push(`${street}, ${city}, Belgium`);
+	}
+
+	// ENHANCED: Luxembourg address cleanup with duplicate city name handling
+	if (fixedAddress.toLowerCase().includes('luxembourg') && parts.length >= 4) {
+		const street = parts[0];
+		const city = parts[1];
+		const postalCode = parts.length >= 3 ? parts[2] : '';
+
+		// Strategy 1: Handle duplicate city names and administrative regions
+		// Pattern: "Street, City, PostalCode, City, Region, Luxembourg"
+		// Example: "1 A Laangert, Bertrange, 8117, Bertrange, Centre, Luxembourg"
+		const cityOccurrences = parts.filter(
+			(part) => part.toLowerCase() === city.toLowerCase()
+		).length;
+
+		if (cityOccurrences > 1) {
+			console.log(
+				`🇱🇺 Detected duplicate city name "${city}" - applying deduplication strategy`
+			);
+
+			// Remove duplicate city and administrative region
+			if (/^\d{4}$/.test(postalCode)) {
+				// Primary fix: Street, City, PostalCode, Luxembourg
+				variations.push(`${street}, ${city}, ${postalCode}, Luxembourg`);
+				console.log(
+					`🇱🇺 Primary fix: ${street}, ${city}, ${postalCode}, Luxembourg`
+				);
+
+				// European postal format: Street, PostalCode City, Luxembourg
+				variations.push(`${street}, ${postalCode} ${city}, Luxembourg`);
+				console.log(
+					`🇱🇺 European format: ${street}, ${postalCode} ${city}, Luxembourg`
+				);
+			}
+		}
+
+		// Strategy 2: Remove administrative regions (Centre, Nord, Sud, etc.)
+		const luxembourgRegions = [
+			'centre',
+			'nord',
+			'sud',
+			'est',
+			'ouest',
+			'canton',
+			'diekirch',
+			'echternach',
+			'esch-sur-alzette',
+			'grevenmacher',
+			'luxembourg',
+			'mersch',
+			'redange',
+			'remich',
+			'vianden',
+			'wiltz',
+		];
+
+		const hasRegion = parts.some((part) =>
+			luxembourgRegions.includes(part.toLowerCase())
+		);
+
+		if (hasRegion) {
+			console.log('🇱🇺 Detected administrative region - removing it');
+			// Filter out administrative regions
+			const filteredParts = parts.filter(
+				(part) =>
+					!luxembourgRegions.includes(part.toLowerCase()) &&
+					part.toLowerCase() !== 'luxembourg'
+			);
+
+			if (filteredParts.length >= 3) {
+				const cleanStreet = filteredParts[0];
+				const cleanCity = filteredParts[1];
+				const cleanPostal = filteredParts[2];
+
+				if (/^\d{4}$/.test(cleanPostal)) {
+					variations.push(
+						`${cleanStreet}, ${cleanCity}, ${cleanPostal}, Luxembourg`
+					);
+					console.log(
+						`🇱🇺 Clean format: ${cleanStreet}, ${cleanCity}, ${cleanPostal}, Luxembourg`
+					);
+				}
+			}
+		}
+
+		// Strategy 3: Standard Luxembourg formats (fallback)
+		if (/^\d{4}$/.test(postalCode)) {
+			variations.push(`${street}, ${city}, ${postalCode}, Luxembourg`);
+			variations.push(`${street}, ${postalCode} ${city}, Luxembourg`);
+		} else {
+			variations.push(`${street}, ${city}, Luxembourg`);
+		}
+
+		// Strategy 4: City-only fallback for very complex addresses
+		if (parts.length > 5) {
+			variations.push(`${city}, Luxembourg`);
+			console.log('🇱🇺 City-only fallback for complex Luxembourg address');
+		}
+	}
+
+	// ENHANCED: German address cleanup
+	if (fixedAddress.toLowerCase().includes('germany') && parts.length >= 4) {
+		const street = parts[0];
+		const city = parts[1];
+
+		variations.push(`${street}, ${city}, Germany`);
+		console.log('🇩🇪 Removed German administrative levels');
+
+		if (parts.length >= 3 && /^\d{5}$/.test(parts[2])) {
+			const postalCode = parts[2];
+			variations.push(`${street}, ${postalCode} ${city}, Germany`);
+		}
+	}
+
+	// ENHANCED: French address cleanup
+	if (fixedAddress.toLowerCase().includes('france') && parts.length >= 4) {
+		const street = parts[0];
+		const city = parts[1];
+
+		variations.push(`${street}, ${city}, France`);
+		console.log('🇫🇷 Removed French administrative levels');
+
+		if (parts.length >= 3 && /^\d{5}$/.test(parts[2])) {
+			const postalCode = parts[2];
+			variations.push(`${street}, ${postalCode} ${city}, France`);
+		}
+	}
+
+	return variations;
 }
 
 // Parse Luxembourg address format and create alternative search terms
@@ -223,12 +681,12 @@ function makeGeocodingRequest(url, searchAddress) {
 	});
 }
 
-// Batch geocode all properties with improved error handling and rate limiting
-async function geocodeAllProperties(properties) {
+// Batch geocode all properties with improved error handling, rate limiting, and caching
+async function geocodeAllProperties(properties, allProperties) {
 	console.log(`Starting geocoding for ${properties.length} properties...`);
 	const geocodedProperties = [];
 	let successCount = 0;
-	let fallbackCount = 0;
+	let cachedCount = 0;
 
 	for (let i = 0; i < properties.length; i++) {
 		const property = properties[i];
@@ -236,37 +694,80 @@ async function geocodeAllProperties(properties) {
 			`Geocoding ${i + 1}/${properties.length}: ${property.Location}`
 		);
 
-		const coords = await geocodeAddress(property.Location);
+		let coords;
 
-		// Check if we got real coordinates vs Luxembourg center fallback
-		if (coords.lat !== 49.6116 || coords.lng !== 6.1319) {
-			successCount++;
+		// Check if coordinates are already cached in the CSV
+		if (
+			property.latitude &&
+			property.longitude &&
+			!isNaN(parseFloat(property.latitude)) &&
+			!isNaN(parseFloat(property.longitude))
+		) {
+			coords = {
+				lat: parseFloat(property.latitude),
+				lng: parseFloat(property.longitude),
+				display_name: property.geocoded_address || property.Location,
+			};
+			cachedCount++;
 			console.log(
-				`✓ Successfully geocoded: ${coords.lat.toFixed(
+				`✓ Using cached coordinates: ${coords.lat.toFixed(
 					4
 				)}, ${coords.lng.toFixed(4)}`
 			);
 		} else {
-			fallbackCount++;
-			console.log(`⚠ Using fallback coordinates for: ${property.Location}`);
+			// Geocode the address
+			coords = await geocodeAddress(property.Location);
+			if (coords) {
+				// Update the property with new coordinates for caching
+				property.latitude = coords.lat.toString();
+				property.longitude = coords.lng.toString();
+
+				// Find and update the original property in allProperties array
+				const originalProperty = allProperties.find(
+					(p) =>
+						p.Location === property.Location &&
+						p['Price From'] === property['Price From'] &&
+						p['Area From'] === property['Area From']
+				);
+				if (originalProperty) {
+					originalProperty.latitude = coords.lat.toString();
+					originalProperty.longitude = coords.lng.toString();
+				}
+
+				// Check if we got real coordinates vs Luxembourg center fallback
+				if (coords) {
+					successCount++;
+					console.log(
+						`✓ Successfully geocoded: ${coords.lat.toFixed(
+							4
+						)}, ${coords.lng.toFixed(4)}`
+					);
+				} else {
+					console.error(
+						`Geocoding failed coordinates for: ${property.Location}`
+					);
+				}
+			}
 		}
 
-		geocodedProperties.push({
-			...property,
-			lat: coords.lat,
-			lng: coords.lng,
-			geocoded_address: coords.display_name || property.Location,
-		});
+		if (coords) {
+			geocodedProperties.push({
+				...property,
+				lat: coords.lat,
+				lng: coords.lng,
+				geocoded_address: coords.display_name || property.Location,
+			});
 
-		// Progressive delay based on success rate to be respectful to the service
-		const delayMs = fallbackCount > successCount ? 2000 : 1000;
-		if (i < properties.length - 1) {
-			await new Promise((resolve) => setTimeout(resolve, delayMs));
+			// Progressive delay based on success rate to be respectful to the service
+			// No delay needed for cached results
+			if (!property.latitude && i < properties.length - 1) {
+				await new Promise((resolve) => setTimeout(resolve, 800));
+			}
 		}
 	}
 
 	console.log(
-		`Geocoding completed! Success: ${successCount}, Fallbacks: ${fallbackCount}`
+		`Geocoding completed! Success: ${successCount}, Cached: ${cachedCount}`
 	);
 	return geocodedProperties;
 }
@@ -779,6 +1280,13 @@ async function main() {
 		const allProperties = parseCSV(csvPath);
 		console.log(`Total properties in dataset: ${allProperties.length}`);
 
+		// Store original headers for CSV saving
+		const csvContent = fs.readFileSync(csvPath, 'utf-8');
+		const originalHeaders = csvContent
+			.split('\n')[0]
+			.split(',')
+			.map((h) => h.trim());
+
 		// Filter properties with single price and area values
 		const filteredProperties = filterProperties(allProperties);
 		console.log(
@@ -793,8 +1301,15 @@ async function main() {
 		// Calculate cost per square meter
 		const propertiesWithCost = calculateCostPerSqM(filteredProperties);
 
-		// Geocode all properties to get real coordinates
-		const geocodedProperties = await geocodeAllProperties(propertiesWithCost);
+		// Geocode all properties to get real coordinates (with caching)
+		const geocodedProperties = await geocodeAllProperties(
+			propertiesWithCost,
+			allProperties
+		);
+
+		// Save the updated CSV with geocoded coordinates
+		console.log('\nSaving geocoded coordinates to CSV...');
+		saveCSVWithCoordinates(csvPath, allProperties, originalHeaders);
 
 		// Sort by cost per square meter
 		geocodedProperties.sort((a, b) => b.costPerSqM - a.costPerSqM);
@@ -879,5 +1394,42 @@ async function main() {
 	}
 }
 
-// Run the analysis
+// Test function to verify address cleanup strategies
+async function testAddressCleanup() {
+	console.log('\n🧪 Testing Address Cleanup Strategies\n');
+
+	const testCases = [
+		// Your specific failing case
+		'1 A Laangert, Bertrange, 8117, Bertrange, Centre, Luxembourg',
+		// Additional test cases
+		'23 Rue de la Paix, Esch-sur-Alzette, 4000, Esch-sur-Alzette, Sud, Luxembourg',
+		'45 Avenue Victor Hugo, Luxembourg-Ville, 1234, Luxembourg-Ville, Centre, Luxembourg',
+	];
+
+	for (const testAddress of testCases) {
+		console.log(`\n📍 Testing: ${testAddress}`);
+		console.log('Generated variations:');
+
+		const variations = getCleanedAddressVariations(testAddress);
+		variations.forEach((variation, i) => {
+			console.log(`  ${i + 1}. ${variation}`);
+		});
+
+		// Test actual geocoding (uncomment to test with real API calls)
+		// console.log('\n🌍 Testing geocoding...');
+		// const result = await geocodeAddress(testAddress);
+		// if (result) {
+		//     console.log(`✅ Success: ${result.lat.toFixed(4)}, ${result.lng.toFixed(4)}`);
+		//     console.log(`   Display: ${result.display_name}`);
+		// } else {
+		//     console.log('❌ Failed to geocode');
+		// }
+
+		console.log('─'.repeat(80));
+	}
+}
+
+// Uncomment the line below to run the test
+// testAddressCleanup();
+
 main();
