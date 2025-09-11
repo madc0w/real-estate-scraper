@@ -1,6 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 
+const type = 'for-sale';
+const isUsingOnlyCachedGeocodes = false;
+
 // Read and parse CSV data
 function parseCSV(filePath) {
 	// Read the file as binary first to handle encoding properly
@@ -36,13 +39,16 @@ function parseCSV(filePath) {
 
 // Save updated CSV data with geocoded coordinates
 function saveCSVWithCoordinates(filePath, data, originalHeaders) {
-	// Ensure latitude and longitude headers exist
+	// Ensure latitude, longitude, and geocode address headers exist
 	const headers = [...originalHeaders];
 	if (!headers.includes('latitude')) {
 		headers.push('latitude');
 	}
 	if (!headers.includes('longitude')) {
 		headers.push('longitude');
+	}
+	if (!headers.includes('Geocode address')) {
+		headers.push('Geocode address');
 	}
 
 	// Create CSV content
@@ -86,6 +92,138 @@ function parseCSVLine(line) {
 	return result;
 }
 
+// Validate that an address has at least a meaningful street component
+function validateAddress(address) {
+	if (!address || typeof address !== 'string') {
+		return false;
+	}
+
+	// Simple fix: remove comma after street number to combine number and street name
+	address = address.replace(/^(\d[\dA-Z\-]*)\,/i, '$1');
+
+	// Split by comma and get the first part (street)
+	const parts = address.split(',').map((part) => part.trim());
+	if (parts.length === 0) {
+		return false;
+	}
+
+	const streetPart = parts[0].trim();
+
+	// Check if street part exists and is meaningful
+	if (!streetPart || streetPart.length === 0) {
+		return false;
+	}
+
+	// Common problematic prefixes/codes that indicate no real street
+	const problematicPrefixes = [
+		'NC',
+		'N/A',
+		'TBD',
+		'TBA',
+		'UNKNOWN',
+		'NO ADDRESS',
+		'NOT SPECIFIED',
+		'NA',
+		'???',
+		'--',
+		'NULL',
+		'NONE',
+		'X',
+		'?',
+		'NO STREET',
+		'MISSING',
+		'UNDEFINED',
+	];
+
+	const streetUpper = streetPart.toUpperCase();
+
+	// Reject if it's a problematic prefix
+	if (problematicPrefixes.includes(streetUpper)) {
+		console.log(
+			`⚠️  Rejected address with invalid street: "${streetPart}". address: ${address}`
+		);
+		return false;
+	}
+
+	// Reject if it's too short (less than 3 characters, likely a code)
+	if (streetPart.length < 3) {
+		console.log(
+			`⚠️  Rejected address with too short street: "${streetPart}" . address: ${address}`
+		);
+		return false;
+	}
+
+	// Reject if it's all caps and very short (likely a code like "ABC")
+	if (/^[A-Z]{1,3}$/.test(streetPart)) {
+		console.log(
+			`⚠️  Rejected address with code-like street: "${streetPart}". address: ${address}`
+		);
+		return false;
+	}
+
+	// Reject if it's just numbers (postal codes aren't streets)
+	if (/^\d+$/.test(streetPart)) {
+		console.log(
+			`⚠️  Rejected address starting with just numbers: "${streetPart}". address: ${address}`
+		);
+		return false;
+	}
+
+	// Reject if it's just a city name without street indicators
+	// Check if the streetPart looks like just a city name (no street number or street type words)
+	const hasStreetNumber = /\d/.test(streetPart);
+	const hasStreetIndicators =
+		/\b(rue|street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|place|pl|way|court|ct|circle|cir|square|sq|alley|ally|path|trail|terrace|ter|parkway|pkwy|highway|hwy|route|rt|crescent|cres|close|gardens|gdns|grove|gr|hill|heights|park|mews|passage|walk|row|strand|quay|embankment|promenade|esplanade|laangert|an|am|bei|zur|zum|strasse|str|gasse|platz|weg|allee|ring|damm|berg|tal|feld|hof|wiese|bach|brunnen|quelle|mühle|kirch|kapelle|schloss|burg|turm|tor|brücke|markt|zentrum|dorf|stadt|siedlung|anger|aue|heide|forst|wald|see|teich|fluss|ufer|hang|kuppe|spitze|kopf|horn|fels|stein|grund|matte|wiese|acker|garten|park|alle|allee|straße)\b/i.test(
+			streetPart
+		);
+
+	// Common city names that shouldn't be considered streets
+	const commonCityNames = [
+		'namur',
+		'brussels',
+		'bruxelles',
+		'antwerp',
+		'anvers',
+		'ghent',
+		'gent',
+		'charleroi',
+		'liege',
+		'luik',
+		'bruges',
+		'brugge',
+		'luxembourg',
+		'letzebuerg',
+		'esch',
+		'differdange',
+		'dudelange',
+		'petange',
+		'sanem',
+		'bettembourg',
+		'schifflange',
+		'kayl',
+		'rumelange',
+		'mondercange',
+	];
+	const isCityName = commonCityNames.includes(streetPart.toLowerCase());
+
+	if (isCityName && !hasStreetNumber && !hasStreetIndicators) {
+		console.log(
+			`⚠️  Rejected address that appears to be just a city name: "${streetPart}". address: ${address}`
+		);
+		return false;
+	}
+
+	// Must contain at least one letter (streets should have names)
+	if (!/[a-zA-Z]/.test(streetPart)) {
+		console.log(
+			`⚠️  Rejected address with no letters in street: "${streetPart}". address: ${address}`
+		);
+		return false;
+	}
+
+	return true;
+}
+
 // Filter properties with price from and area from but no price to and area to
 function filterProperties(data) {
 	return data.filter((property) => {
@@ -93,6 +231,10 @@ function filterProperties(data) {
 		const priceTo = property['Price To'];
 		const areaFrom = parseFloat(property['Area From']);
 		const areaTo = property['Area To'];
+		const location = property['Location'] || '';
+
+		// Check if address has at least a street (first part before comma should be meaningful)
+		const hasValidStreet = validateAddress(location);
 
 		// Check if price from and area from are defined (not empty/null)
 		// and price to and area to are empty
@@ -102,7 +244,8 @@ function filterProperties(data) {
 			(!priceTo || priceTo.trim() === '') &&
 			!isNaN(areaFrom) &&
 			areaFrom > 20 &&
-			(!areaTo || areaTo.trim() === '')
+			(!areaTo || areaTo.trim() === '') &&
+			hasValidStreet
 		);
 	});
 }
@@ -360,7 +503,11 @@ async function geocodeAddress(address) {
 			const result = await makeGeocodingRequest(url, cleanedSearchAddress);
 			if (result?.lat && result?.lng) {
 				console.log(`✅ Success with variation: ${cleanedSearchAddress}`);
-				return result;
+				// Return the result with the successful address variation
+				return {
+					...result,
+					successful_address: cleanedSearchAddress,
+				};
 			}
 
 			// Progressive delay between attempts
@@ -684,6 +831,17 @@ function makeGeocodingRequest(url, searchAddress) {
 // Batch geocode all properties with improved error handling, rate limiting, and caching
 async function geocodeAllProperties(properties, allProperties) {
 	console.log(`Starting geocoding for ${properties.length} properties...`);
+
+	if (isUsingOnlyCachedGeocodes) {
+		console.log(
+			'🔒 CACHED-ONLY MODE: Will only use existing cached coordinates, no API calls will be made'
+		);
+	} else {
+		console.log(
+			'🌍 FULL MODE: Will geocode missing coordinates using API calls'
+		);
+	}
+
 	const geocodedProperties = [];
 	let successCount = 0;
 	let cachedCount = 0;
@@ -707,6 +865,7 @@ async function geocodeAllProperties(properties, allProperties) {
 				lat: parseFloat(property.latitude),
 				lng: parseFloat(property.longitude),
 				display_name: property.geocoded_address || property.Location,
+				successful_address: property['Geocode address'] || property.Location,
 			};
 			cachedCount++;
 			console.log(
@@ -714,13 +873,14 @@ async function geocodeAllProperties(properties, allProperties) {
 					4
 				)}, ${coords.lng.toFixed(4)}`
 			);
-		} else {
-			// Geocode the address
+		} else if (!isUsingOnlyCachedGeocodes) {
+			// Geocode the address only if not using cached-only mode
 			coords = await geocodeAddress(property.Location);
 			if (coords) {
-				// Update the property with new coordinates for caching
+				// Update the property with new coordinates and successful address for caching
 				property.latitude = coords.lat.toString();
 				property.longitude = coords.lng.toString();
+				property['Geocode address'] = coords.successful_address;
 
 				// Find and update the original property in allProperties array
 				const originalProperty = allProperties.find(
@@ -732,6 +892,7 @@ async function geocodeAllProperties(properties, allProperties) {
 				if (originalProperty) {
 					originalProperty.latitude = coords.lat.toString();
 					originalProperty.longitude = coords.lng.toString();
+					originalProperty['Geocode address'] = coords.successful_address;
 				}
 
 				// Check if we got real coordinates vs Luxembourg center fallback
@@ -740,7 +901,9 @@ async function geocodeAllProperties(properties, allProperties) {
 					console.log(
 						`✓ Successfully geocoded: ${coords.lat.toFixed(
 							4
-						)}, ${coords.lng.toFixed(4)}`
+						)}, ${coords.lng.toFixed(4)} using address: ${
+							coords.successful_address
+						}`
 					);
 				} else {
 					console.error(
@@ -748,6 +911,12 @@ async function geocodeAllProperties(properties, allProperties) {
 					);
 				}
 			}
+		} else {
+			// Skip geocoding when using cached-only mode
+			console.log(
+				`⏭️ Skipping geocoding (cached-only mode): ${property.Location}`
+			);
+			coords = null;
 		}
 
 		if (coords) {
@@ -756,6 +925,7 @@ async function geocodeAllProperties(properties, allProperties) {
 				lat: coords.lat,
 				lng: coords.lng,
 				geocoded_address: coords.display_name || property.Location,
+				successful_geocode_address: coords.successful_address,
 			});
 
 			// Progressive delay based on success rate to be respectful to the service
@@ -766,8 +936,9 @@ async function geocodeAllProperties(properties, allProperties) {
 		}
 	}
 
+	const skippedCount = properties.length - successCount - cachedCount;
 	console.log(
-		`Geocoding completed! Success: ${successCount}, Cached: ${cachedCount}`
+		`Geocoding completed! Success: ${successCount}, Cached: ${cachedCount}, Skipped: ${skippedCount}`
 	);
 	return geocodedProperties;
 }
@@ -943,6 +1114,17 @@ function generateHeatMap(properties) {
             color: #6c757d;
             border-top: 1px solid #e9ecef;
             padding-top: 8px;
+        }
+        
+        .popup-details a {
+            color: #3498db;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        
+        .popup-details a:hover {
+            color: #2980b9;
+            text-decoration: underline;
         }
         
         .popup-address {
@@ -1157,10 +1339,10 @@ function generateHeatMap(properties) {
         properties.forEach(property => {
             const color = getMarkerColor(property.costPerSqM);
             const marker = L.circleMarker([property.lat, property.lng], {
-                radius: Math.min(6 + Math.log(property.costPerSqM / 1000), 12),
+                radius: Math.min(3 + Math.log(property.costPerSqM / 1000) * 0.5, 6),
                 fillColor: color,
                 color: '#ffffff',
-                weight: 2,
+                weight: 1,
                 opacity: 0.9,
                 fillOpacity: 0.7
             });
@@ -1173,6 +1355,7 @@ function generateHeatMap(properties) {
                         <strong>Price:</strong> €\${property.priceFrom.toLocaleString()}<br>
                         <strong>Area:</strong> \${property.areaFrom} m²<br>
                         <strong>Location:</strong> \${property.Location}
+                        \${property.URL ? '<br><strong>Listing:</strong> <a href="' + property.URL + '" target="_blank" rel="noopener">View Original</a>' : ''}
                     </div>
                     \${property.geocoded_address ? '<div class="popup-address">Geocoded: ' + property.geocoded_address + '</div>' : ''}
                 </div>
@@ -1276,7 +1459,7 @@ async function main() {
 
 	try {
 		// Read CSV data
-		const csvPath = path.join(__dirname, 'athome.csv');
+		const csvPath = path.join(__dirname, `athome-${type}.csv`);
 		const allProperties = parseCSV(csvPath);
 		console.log(`Total properties in dataset: ${allProperties.length}`);
 
@@ -1374,10 +1557,7 @@ async function main() {
 
 		// Generate HTML heat map with real coordinates
 		const htmlContent = generateHeatMap(geocodedProperties);
-		const outputPath = path.join(
-			__dirname,
-			'luxembourg_real_estate_heatmap.html'
-		);
+		const outputPath = path.join(__dirname, `${type}-heatmap.html`);
 		fs.writeFileSync(outputPath, htmlContent);
 
 		console.log(`\nHeat map generated: ${outputPath}`);

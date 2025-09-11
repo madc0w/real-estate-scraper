@@ -3,9 +3,11 @@ const fs = require('fs');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 // const createCsvStringifier = require('csv-writer').createObjectCsvStringifier;
 
+const type = 'for-rent';
+// const type = 'for-sale';
 const maxArea = 1200;
 const areaStep = 20;
-const outFileName = 'athome.csv';
+const outFileName = `athome-${type}.csv`;
 const maxPages = 500;
 
 const ids = new Set();
@@ -132,7 +134,9 @@ async function scrapeAtHomeLu() {
 		for (let area = 0; area <= maxArea; area += areaStep) {
 			for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
 				const toArea = area + areaStep - 1;
-				const pageUrl = `https://www.athome.lu/vente/?tr=buy&page=${pageNum}&srf_min=${area}&srf_max=${toArea}`;
+				const pageUrl = `https://www.athome.lu/${
+					type == 'for-sale' ? 'vente' : 'location'
+				}/?tr=buy&page=${pageNum}&srf_min=${area}&srf_max=${toArea}`;
 				console.log(
 					`${new Date().toISOString()} : Navigating to page ${pageNum} for area ${area} - ${toArea} m²: ${pageUrl}`
 				);
@@ -358,42 +362,6 @@ async function scrapeAtHomeLu() {
 											}
 											if (data.fsbo) break;
 										}
-
-										// // Only check for "Particulier" in specific seller context, not in descriptions
-										// if (!data.fsbo) {
-										// 	// Look for "Particulier" specifically in seller/contact sections
-										// 	const sellerSections = document.querySelectorAll(
-										// 		'[class*="seller"], [class*="contact"], [class*="agency"], [class*="author"], [id*="contact"], [id*="seller"]'
-										// 	);
-
-										// 	for (let section of sellerSections) {
-										// 		const sectionText = section.textContent;
-										// 		if (
-										// 			sectionText.includes('Particulier') ||
-										// 			sectionText.includes('particulier')
-										// 		) {
-										// 			// Make sure it's actually indicating private seller, not just containing the word
-										// 			if (
-										// 				sectionText
-										// 					.toLowerCase()
-										// 					.includes('vendu par particulier') ||
-										// 				sectionText
-										// 					.toLowerCase()
-										// 					.includes('vendeur particulier') ||
-										// 				sectionText
-										// 					.toLowerCase()
-										// 					.includes('annonce particulier') ||
-										// 				(sectionText
-										// 					.toLowerCase()
-										// 					.includes('particulier') &&
-										// 					sectionText.toLowerCase().includes('contact'))
-										// 			) {
-										// 				data.fsbo = 'particulier';
-										// 				break;
-										// 			}
-										// 		}
-										// 	}
-										// }
 									}
 
 									// Creation and update dates
@@ -404,7 +372,10 @@ async function scrapeAtHomeLu() {
 										data.updateDate = appData.updatedAt;
 									}
 
-									console.log('Successfully extracted structured data');
+									console.log(
+										'Successfully extracted structured data. location:',
+										data.location
+									);
 									return data;
 								} catch (error) {
 									console.log(
