@@ -39,7 +39,7 @@ function parseCSV(filePath) {
 
 // Save updated CSV data with geocoded coordinates
 function saveCSVWithCoordinates(filePath, data, originalHeaders) {
-	// Ensure latitude, longitude, and geocode address headers exist
+	// Ensure latitude, longitude, geocode address, and eur/sq m headers exist
 	const headers = [...originalHeaders];
 	if (!headers.includes('latitude')) {
 		headers.push('latitude');
@@ -49,6 +49,9 @@ function saveCSVWithCoordinates(filePath, data, originalHeaders) {
 	}
 	if (!headers.includes('Geocode address')) {
 		headers.push('Geocode address');
+	}
+	if (!headers.includes('eur/sq m')) {
+		headers.push('eur/sq m');
 	}
 
 	// Create CSV content
@@ -236,8 +239,15 @@ function filterProperties(data) {
 		// Check if address has at least a street (first part before comma should be meaningful)
 		const hasValidStreet = validateAddress(location);
 
+		// Calculate cost per square meter for filtering
+		const costPerSqM =
+			!isNaN(priceFrom) && !isNaN(areaFrom) && areaFrom > 0
+				? priceFrom / areaFrom
+				: 0;
+
 		// Check if price from and area from are defined (not empty/null)
 		// and price to and area to are empty
+		// Also filter out properties with cost per sq m outside the 400-20,000 range
 		return (
 			!isNaN(priceFrom) &&
 			priceFrom > 0 &&
@@ -245,7 +255,9 @@ function filterProperties(data) {
 			!isNaN(areaFrom) &&
 			areaFrom > 20 &&
 			(!areaTo || areaTo.trim() === '') &&
-			hasValidStreet
+			hasValidStreet &&
+			costPerSqM >= 400 &&
+			costPerSqM <= 20000
 		);
 	});
 }
@@ -1243,7 +1255,7 @@ function generateHeatMap(properties) {
         <h4>💰 Cost per m²</h4>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #ffffcc, #ffeda0);"></div>
-            <span>€0 - €2K</span>
+            <span>€400 - €2K</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #ffeda0, #fed976);"></div>
@@ -1259,15 +1271,11 @@ function generateHeatMap(properties) {
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #fd8d3c, #fc4e2a);"></div>
-            <span>€10K - €20K</span>
+            <span>€10K - €15K</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #fc4e2a, #e31a1c);"></div>
-            <span>€20K - €50K</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: linear-gradient(90deg, #e31a1c, #b10026);"></div>
-            <span>€50K+</span>
+            <span>€15K - €20K</span>
         </div>
     </div>
 
@@ -1297,9 +1305,12 @@ function generateHeatMap(properties) {
         console.log('Loaded', properties.length, 'properties with real coordinates');
         
         // Create optimized heat map data with proper intensity scaling
-        const maxCostForHeat = Math.min(${maxCost}, 50000); // Cap for better visualization
+        const maxCostForHeat = 20000; // Cap at €20,000 as specified
+        const minCostForHeat = 400; // Start at €400 as specified
         const heatData = properties.map(property => {
-            const intensity = Math.min(property.costPerSqM / maxCostForHeat, 1);
+            // Scale intensity from 0 to 1 based on the €400-€20,000 range
+            const scaledCost = Math.max(minCostForHeat, Math.min(property.costPerSqM, maxCostForHeat));
+            const intensity = (scaledCost - minCostForHeat) / (maxCostForHeat - minCostForHeat);
             return [property.lat, property.lng, intensity];
         });
 
@@ -1310,15 +1321,13 @@ function generateHeatMap(properties) {
             maxZoom: 17,
             max: 1.0,
             gradient: {
-                0.0: 'rgba(255,255,204,0.8)',
-                0.1: 'rgba(255,237,160,0.8)',
-                0.2: 'rgba(254,217,118,0.8)',
-                0.3: 'rgba(254,178,76,0.8)',
-                0.4: 'rgba(253,141,60,0.8)',
-                0.5: 'rgba(252,78,42,0.8)',
-                0.6: 'rgba(227,26,28,0.8)',
-                0.8: 'rgba(177,0,38,0.9)',
-                1.0: 'rgba(128,0,38,1.0)'
+                0.0: 'rgba(255,255,204,0.6)',    // €400 - Light yellow
+                0.15: 'rgba(255,237,160,0.7)',   // €2.7K
+                0.25: 'rgba(254,217,118,0.7)',   // €4.3K  
+                0.4: 'rgba(254,178,76,0.8)',     // €6.3K
+                0.6: 'rgba(253,141,60,0.8)',     // €10K
+                0.8: 'rgba(252,78,42,0.9)',      // €15K
+                1.0: 'rgba(227,26,28,1.0)'       // €20K - Deep red
             }
         }).addTo(map);
 
@@ -1327,13 +1336,13 @@ function generateHeatMap(properties) {
         
         // Add markers for properties with different colors based on cost
         function getMarkerColor(costPerSqM) {
-            if (costPerSqM > 20000) return '#b10026';
-            if (costPerSqM > 10000) return '#e31a1c';
-            if (costPerSqM > 6000) return '#fc4e2a';
-            if (costPerSqM > 4000) return '#fd8d3c';
-            if (costPerSqM > 2000) return '#feb24c';
-            if (costPerSqM > 1000) return '#fed976';
-            return '#ffeda0';
+            if (costPerSqM > 15000) return '#e31a1c';
+            if (costPerSqM > 10000) return '#fc4e2a';
+            if (costPerSqM > 6000) return '#fd8d3c';
+            if (costPerSqM > 4000) return '#feb24c';
+            if (costPerSqM > 2000) return '#fed976';
+            if (costPerSqM > 400) return '#ffeda0';
+            return '#ffffcc';
         }
         
         properties.forEach(property => {
@@ -1400,15 +1409,13 @@ function generateHeatMap(properties) {
                 maxZoom: 17,
                 max: 1.0,
                 gradient: {
-                    0.0: 'rgba(255,255,204,0.8)',
-                    0.1: 'rgba(255,237,160,0.8)',
-                    0.2: 'rgba(254,217,118,0.8)',
-                    0.3: 'rgba(254,178,76,0.8)',
-                    0.4: 'rgba(253,141,60,0.8)',
-                    0.5: 'rgba(252,78,42,0.8)',
-                    0.6: 'rgba(227,26,28,0.8)',
-                    0.8: 'rgba(177,0,38,0.9)',
-                    1.0: 'rgba(128,0,38,1.0)'
+                    0.0: 'rgba(255,255,204,0.6)',    // €400 - Light yellow
+                    0.15: 'rgba(255,237,160,0.7)',   // €2.7K
+                    0.25: 'rgba(254,217,118,0.7)',   // €4.3K  
+                    0.4: 'rgba(254,178,76,0.8)',     // €6.3K
+                    0.6: 'rgba(253,141,60,0.8)',     // €10K
+                    0.8: 'rgba(252,78,42,0.9)',      // €15K
+                    1.0: 'rgba(227,26,28,1.0)'       // €20K - Deep red
                 }
             });
             if (document.getElementById('showHeat').checked) {
@@ -1473,7 +1480,7 @@ async function main() {
 		// Filter properties with single price and area values
 		const filteredProperties = filterProperties(allProperties);
 		console.log(
-			`Properties with defined single price and area: ${filteredProperties.length}`
+			`Properties with defined single price and area (€400-20,000/m²): ${filteredProperties.length}`
 		);
 
 		if (filteredProperties.length === 0) {
@@ -1483,6 +1490,19 @@ async function main() {
 
 		// Calculate cost per square meter
 		const propertiesWithCost = calculateCostPerSqM(filteredProperties);
+
+		// Update all properties with eur/sq m values for CSV saving
+		allProperties.forEach((property) => {
+			const priceFrom = parseFloat(property['Price From']);
+			const areaFrom = parseFloat(property['Area From']);
+
+			if (!isNaN(priceFrom) && !isNaN(areaFrom) && areaFrom > 0) {
+				const costPerSqM = priceFrom / areaFrom;
+				property['eur/sq m'] = costPerSqM.toFixed(2);
+			} else {
+				property['eur/sq m'] = '';
+			}
+		});
 
 		// Geocode all properties to get real coordinates (with caching)
 		const geocodedProperties = await geocodeAllProperties(
