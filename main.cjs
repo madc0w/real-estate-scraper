@@ -109,6 +109,12 @@ async function scrapeAtHomeLu() {
 			{ id: 'fsbo', title: 'FSBO' },
 			{ id: 'creationDate', title: 'Creation Date' },
 			{ id: 'updateDate', title: 'Update Date' },
+			{ id: 'latitude', title: 'Latitude' },
+			{ id: 'longitude', title: 'Longitude' },
+			{ id: 'sold', title: 'Sold?' },
+			{ id: 'type', title: 'Type' },
+			{ id: 'charges', title: 'Charges' },
+			{ id: 'energyClass', title: 'Energy Class' },
 		],
 		append: csvExists, // Append to existing file if it exists
 		encoding: 'utf8', // Ensure proper encoding
@@ -136,7 +142,9 @@ async function scrapeAtHomeLu() {
 				const toArea = area + areaStep - 1;
 				const pageUrl = `https://www.athome.lu/${
 					type == 'for-sale' ? 'vente' : 'location'
-				}/?tr=buy&page=${pageNum}&srf_min=${area}&srf_max=${toArea}`;
+				}/?tr=${
+					type == 'for-sale' ? 'buy' : 'rent'
+				}&page=${pageNum}&srf_min=${area}&srf_max=${toArea}`;
 				console.log(
 					`${new Date().toISOString()} : Navigating to page ${pageNum} for area ${area} - ${toArea} m²: ${pageUrl}`
 				);
@@ -234,6 +242,12 @@ async function scrapeAtHomeLu() {
 									date: '',
 									creationDate: '',
 									updateDate: '',
+									latitude: '',
+									longitude: '',
+									sold: '',
+									type: '',
+									charges: '',
+									energyClass: '',
 								};
 
 								try {
@@ -261,8 +275,10 @@ async function scrapeAtHomeLu() {
 									// Extract structured data from window.AT_HOME_APP
 									const appData =
 										window.AT_HOME_APP?.preloadedState?.listing?.listing;
+									const appDataOld =
+										window.AT_HOME_APP?.preloadedState?.listing?.listingOld;
 
-									if (!appData) {
+									if (!appData && !appDataOld) {
 										console.log(
 											'No structured data found, but may have extracted range data, falling back to DOM scraping'
 										);
@@ -370,6 +386,52 @@ async function scrapeAtHomeLu() {
 									}
 									if (appData.updatedAt) {
 										data.updateDate = appData.updatedAt;
+									}
+
+									// Latitude and longitude from search_data.geo.pin (in listingOld)
+									if (
+										appDataOld &&
+										appDataOld.search_data?.geo?.pin?.lat &&
+										appDataOld.search_data?.geo?.pin?.lon
+									) {
+										data.latitude = appDataOld.search_data.geo.pin.lat;
+										data.longitude = appDataOld.search_data.geo.pin.lon;
+									}
+
+									// Sold status from has_sold (in listingOld.transaction)
+									if (
+										appDataOld &&
+										typeof appDataOld.transaction?.has_sold !== 'undefined'
+									) {
+										data.sold = appDataOld.transaction.has_sold ? 'Yes' : 'No';
+									}
+
+									// Charges from chargesPrice (in listingOld)
+									if (
+										appDataOld &&
+										(appDataOld.chargesPrice || appDataOld.chargesPrice === 0)
+									) {
+										data.charges = appDataOld.chargesPrice.toString();
+									}
+
+									// Energy class from energyClass (in listingOld)
+									if (appDataOld && appDataOld.energyClass) {
+										data.energyClass = appDataOld.energyClass;
+									}
+
+									// Type from useType - may be in GTM data layer or other global variables
+									try {
+										const gtmDataLayer = window.dataLayer;
+										if (gtmDataLayer && Array.isArray(gtmDataLayer)) {
+											for (let gtmData of gtmDataLayer) {
+												if (gtmData.useType) {
+													data.type = gtmData.useType;
+													break;
+												}
+											}
+										}
+									} catch (e) {
+										// Ignore errors accessing dataLayer
 									}
 
 									console.log(
@@ -606,6 +668,71 @@ async function scrapeAtHomeLu() {
 										// }
 									}
 
+									// Extract coordinates, sold status, and type in fallback mode
+									// These fields are primarily available in structured data, but let's try to extract them here too
+
+									// Try to extract latitude and longitude from any data-* attributes or global variables
+									try {
+										// Look for coordinates in the global AT_HOME_APP if available
+										const athomeApp = window.AT_HOME_APP;
+										if (
+											athomeApp?.preloadedState?.listing?.listingOld
+												?.search_data?.geo?.pin
+										) {
+											const pin =
+												athomeApp.preloadedState.listing.listingOld.search_data
+													.geo.pin;
+											if (pin.lat) data.latitude = pin.lat;
+											if (pin.lon) data.longitude = pin.lon;
+										}
+
+										// Try to get sold status (in listingOld.transaction)
+										if (
+											athomeApp?.preloadedState?.listing?.listingOld
+												?.transaction?.has_sold !== undefined
+										) {
+											data.sold = athomeApp.preloadedState.listing.listingOld
+												.transaction.has_sold
+												? 'Yes'
+												: 'No';
+										}
+
+										// Try to get charges from chargesPrice (in listingOld)
+										if (
+											athomeApp?.preloadedState?.listing?.listingOld
+												?.chargesPrice !== undefined
+										) {
+											data.charges =
+												athomeApp.preloadedState.listing.listingOld.chargesPrice.toString();
+										}
+
+										// Try to get energy class from energyClass (in listingOld)
+										if (
+											athomeApp?.preloadedState?.listing?.listingOld
+												?.energyClass
+										) {
+											data.energyClass =
+												athomeApp.preloadedState.listing.listingOld.energyClass;
+										}
+									} catch (e) {
+										// Ignore errors accessing global variables
+									}
+
+									// Try to extract type from GTM data layer
+									try {
+										const gtmDataLayer = window.dataLayer;
+										if (gtmDataLayer && Array.isArray(gtmDataLayer)) {
+											for (let gtmData of gtmDataLayer) {
+												if (gtmData.useType) {
+													data.type = gtmData.useType;
+													break;
+												}
+											}
+										}
+									} catch (e) {
+										// Ignore errors accessing dataLayer
+									}
+
 									// Clean up the data
 									Object.keys(data).forEach((key) => {
 										if (typeof data[key] === 'string') {
@@ -660,6 +787,12 @@ async function scrapeAtHomeLu() {
 								fsbo: '',
 								creationDate: '',
 								updateDate: '',
+								latitude: '',
+								longitude: '',
+								sold: '',
+								type: '',
+								charges: '',
+								energyClass: '',
 							};
 
 							// Write error record immediately to CSV

@@ -959,9 +959,22 @@ async function geocodeAllProperties(properties, allProperties) {
 function generateHeatMap(properties) {
 	// Calculate statistics for better visualization
 	const costs = properties.map((p) => p.costPerSqM);
+	const sortedCosts = [...costs].sort((a, b) => a - b);
 	const minCost = Math.min(...costs);
 	const maxCost = Math.max(...costs);
 	const avgCost = costs.reduce((sum, cost) => sum + cost, 0) / costs.length;
+
+	// Calculate dynamic range based on percentiles
+	const p10Index = Math.floor(sortedCosts.length * 0.1);
+	const p90Index = Math.floor(sortedCosts.length * 0.9);
+	const p10Value = sortedCosts[p10Index];
+	const p90Value = sortedCosts[p90Index];
+
+	console.log(
+		`Dynamic range: 10th percentile = €${p10Value.toFixed(
+			0
+		)}, 90th percentile = €${p90Value.toFixed(0)}`
+	);
 
 	const html = `<!DOCTYPE html>
 <html lang="en">
@@ -1255,27 +1268,53 @@ function generateHeatMap(properties) {
         <h4>💰 Cost per m²</h4>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #ffffcc, #ffeda0);"></div>
-            <span>€400 - €2K</span>
+            <span>€${Math.round(p10Value).toLocaleString()} - €${Math.round(
+		p10Value + (p90Value - p10Value) * 0.2
+	).toLocaleString()}</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #ffeda0, #fed976);"></div>
-            <span>€2K - €4K</span>
+            <span>€${Math.round(
+							p10Value + (p90Value - p10Value) * 0.2
+						).toLocaleString()} - €${Math.round(
+		p10Value + (p90Value - p10Value) * 0.4
+	).toLocaleString()}</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #fed976, #feb24c);"></div>
-            <span>€4K - €6K</span>
+            <span>€${Math.round(
+							p10Value + (p90Value - p10Value) * 0.4
+						).toLocaleString()} - €${Math.round(
+		p10Value + (p90Value - p10Value) * 0.55
+	).toLocaleString()}</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #feb24c, #fd8d3c);"></div>
-            <span>€6K - €10K</span>
+            <span>€${Math.round(
+							p10Value + (p90Value - p10Value) * 0.55
+						).toLocaleString()} - €${Math.round(
+		p10Value + (p90Value - p10Value) * 0.7
+	).toLocaleString()}</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #fd8d3c, #fc4e2a);"></div>
-            <span>€10K - €15K</span>
+            <span>€${Math.round(
+							p10Value + (p90Value - p10Value) * 0.7
+						).toLocaleString()} - €${Math.round(
+		p10Value + (p90Value - p10Value) * 0.85
+	).toLocaleString()}</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #fc4e2a, #e31a1c);"></div>
-            <span>€15K - €20K</span>
+            <span>€${Math.round(
+							p10Value + (p90Value - p10Value) * 0.85
+						).toLocaleString()} - €${Math.round(
+		p90Value
+	).toLocaleString()}</span>
+        </div>
+        <div class="legend-item" style="opacity: 0.7;">
+            <div class="legend-color" style="background: #666;"></div>
+            <span>Outliers (Top/Bottom 10%)</span>
         </div>
     </div>
 
@@ -1302,47 +1341,66 @@ function generateHeatMap(properties) {
         // Property data with real geocoded coordinates
         const properties = ${JSON.stringify(properties)};
         
-        console.log('Loaded', properties.length, 'properties with real coordinates');
+        // Calculate dynamic percentiles for adaptive coloring
+        const costs = properties.map(p => p.costPerSqM);
+        const sortedCosts = [...costs].sort((a, b) => a - b);
+        const p10Value = sortedCosts[Math.floor(sortedCosts.length * 0.1)];
+        const p90Value = sortedCosts[Math.floor(sortedCosts.length * 0.9)];
         
-        // Create optimized heat map data with proper intensity scaling
-        const maxCostForHeat = 20000; // Cap at €20,000 as specified
-        const minCostForHeat = 400; // Start at €400 as specified
+        console.log('Loaded', properties.length, 'properties with real coordinates');
+        console.log('Dynamic range:', 'P10 =', p10Value.toFixed(0), 'P90 =', p90Value.toFixed(0));
+        
+        // Create optimized heat map data with dynamic intensity scaling
         const heatData = properties.map(property => {
-            // Scale intensity from 0 to 1 based on the €400-€20,000 range
-            const scaledCost = Math.max(minCostForHeat, Math.min(property.costPerSqM, maxCostForHeat));
-            const intensity = (scaledCost - minCostForHeat) / (maxCostForHeat - minCostForHeat);
+            // Scale intensity from 0 to 1 based on the P10-P90 range
+            let intensity;
+            if (property.costPerSqM <= p10Value) {
+                intensity = 0.05; // Very low intensity for bottom 10%
+            } else if (property.costPerSqM >= p90Value) {
+                intensity = 1.0; // Maximum intensity for top 10%
+            } else {
+                // Linear scaling between P10 and P90
+                intensity = (property.costPerSqM - p10Value) / (p90Value - p10Value);
+                intensity = Math.max(0.05, Math.min(1.0, intensity)); // Clamp between 0.05 and 1.0
+            }
             return [property.lat, property.lng, intensity];
         });
 
-        // Create heat layer with better configuration
+        // Create heat layer with dynamic gradient configuration
         let heatLayer = L.heatLayer(heatData, {
             radius: 25,
             blur: 15,
             maxZoom: 17,
             max: 1.0,
             gradient: {
-                0.0: 'rgba(255,255,204,0.6)',    // €400 - Light yellow
-                0.15: 'rgba(255,237,160,0.7)',   // €2.7K
-                0.25: 'rgba(254,217,118,0.7)',   // €4.3K  
-                0.4: 'rgba(254,178,76,0.8)',     // €6.3K
-                0.6: 'rgba(253,141,60,0.8)',     // €10K
-                0.8: 'rgba(252,78,42,0.9)',      // €15K
-                1.0: 'rgba(227,26,28,1.0)'       // €20K - Deep red
+                0.0: 'rgba(204,204,204,0.3)',    // Gray for outliers
+                0.05: 'rgba(255,255,204,0.6)',   // Light yellow (P10)
+                0.2: 'rgba(255,237,160,0.7)',    // Yellow
+                0.4: 'rgba(254,217,118,0.7)',    // Orange-yellow  
+                0.55: 'rgba(254,178,76,0.8)',    // Orange
+                0.7: 'rgba(253,141,60,0.8)',     // Red-orange
+                0.85: 'rgba(252,78,42,0.9)',     // Red
+                1.0: 'rgba(227,26,28,1.0)'       // Deep red (P90)
             }
         }).addTo(map);
 
         // Create marker clusters for better performance
         let markerGroup = L.layerGroup();
         
-        // Add markers for properties with different colors based on cost
+        // Add markers for properties with different colors based on dynamic cost ranges
         function getMarkerColor(costPerSqM) {
-            if (costPerSqM > 15000) return '#e31a1c';
-            if (costPerSqM > 10000) return '#fc4e2a';
-            if (costPerSqM > 6000) return '#fd8d3c';
-            if (costPerSqM > 4000) return '#feb24c';
-            if (costPerSqM > 2000) return '#fed976';
-            if (costPerSqM > 400) return '#ffeda0';
-            return '#ffffcc';
+            if (costPerSqM <= p10Value) return '#cccccc'; // Gray for bottom 10%
+            if (costPerSqM >= p90Value) return '#e31a1c'; // Deep red for top 10%
+            
+            // Calculate position within P10-P90 range
+            const position = (costPerSqM - p10Value) / (p90Value - p10Value);
+            
+            if (position < 0.2) return '#ffffcc'; // Light yellow
+            if (position < 0.4) return '#ffeda0'; // Yellow
+            if (position < 0.55) return '#fed976'; // Orange-yellow
+            if (position < 0.7) return '#feb24c'; // Orange
+            if (position < 0.85) return '#fd8d3c'; // Red-orange
+            return '#fc4e2a'; // Red
         }
         
         properties.forEach(property => {
@@ -1409,13 +1467,14 @@ function generateHeatMap(properties) {
                 maxZoom: 17,
                 max: 1.0,
                 gradient: {
-                    0.0: 'rgba(255,255,204,0.6)',    // €400 - Light yellow
-                    0.15: 'rgba(255,237,160,0.7)',   // €2.7K
-                    0.25: 'rgba(254,217,118,0.7)',   // €4.3K  
-                    0.4: 'rgba(254,178,76,0.8)',     // €6.3K
-                    0.6: 'rgba(253,141,60,0.8)',     // €10K
-                    0.8: 'rgba(252,78,42,0.9)',      // €15K
-                    1.0: 'rgba(227,26,28,1.0)'       // €20K - Deep red
+                    0.0: 'rgba(204,204,204,0.3)',    // Gray for outliers
+                    0.05: 'rgba(255,255,204,0.6)',   // Light yellow (P10)
+                    0.2: 'rgba(255,237,160,0.7)',    // Yellow
+                    0.4: 'rgba(254,217,118,0.7)',    // Orange-yellow  
+                    0.55: 'rgba(254,178,76,0.8)',    // Orange
+                    0.7: 'rgba(253,141,60,0.8)',     // Red-orange
+                    0.85: 'rgba(252,78,42,0.9)',     // Red
+                    1.0: 'rgba(227,26,28,1.0)'       // Deep red (P90)
                 }
             });
             if (document.getElementById('showHeat').checked) {
