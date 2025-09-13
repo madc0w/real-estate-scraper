@@ -1,7 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const type = 'for-sale';
+// const type = 'for-sale';
+const type = 'for-rent';
+
 const isUsingOnlyCachedGeocodes = true;
 
 // Read and parse CSV data
@@ -227,8 +229,69 @@ function validateAddress(address) {
 	return true;
 }
 
+// Calculate cost per square meter percentiles to determine outlier thresholds
+function calculateCostPerSqMThresholds(data) {
+	// First, get all valid cost per square meter values
+	const validCosts = [];
+
+	data.forEach((property) => {
+		const priceFrom = parseFloat(property['Price From']);
+		const priceTo = property['Price To'];
+		const areaFrom = parseFloat(property['Area From']);
+		const areaTo = property['Area To'];
+		const location = property['Location'] || '';
+
+		// Check if address has at least a street (first part before comma should be meaningful)
+		const hasValidStreet = validateAddress(location);
+
+		// Calculate cost per square meter
+		const costPerSqM =
+			!isNaN(priceFrom) && !isNaN(areaFrom) && areaFrom > 0
+				? priceFrom / areaFrom
+				: 0;
+
+		// Only include properties that meet basic criteria
+		if (
+			!isNaN(priceFrom) &&
+			priceFrom > 0 &&
+			(!priceTo || priceTo.trim() === '') &&
+			!isNaN(areaFrom) &&
+			areaFrom > 20 &&
+			(!areaTo || areaTo.trim() === '') &&
+			hasValidStreet &&
+			costPerSqM > 0
+		) {
+			validCosts.push(costPerSqM);
+		}
+	});
+
+	if (validCosts.length === 0) {
+		console.log('No valid cost data found for threshold calculation');
+		return { minCostPerSqM: 0, maxCostPerSqM: Infinity };
+	}
+
+	// Sort costs and calculate 2nd and 98th percentiles
+	validCosts.sort((a, b) => a - b);
+	const count = validCosts.length;
+
+	const p2Index = Math.floor(count * 0.02);
+	const p98Index = Math.floor(count * 0.98);
+
+	const minCostPerSqM = validCosts[p2Index];
+	const maxCostPerSqM = validCosts[p98Index];
+
+	console.log(
+		`Cost per sqM thresholds (excluding top/bottom 2%): €${minCostPerSqM.toFixed(
+			0
+		)} - €${maxCostPerSqM.toFixed(0)}`
+	);
+	console.log(`Total valid properties for threshold calculation: ${count}`);
+
+	return { minCostPerSqM, maxCostPerSqM };
+}
+
 // Filter properties with price from and area from but no price to and area to
-function filterProperties(data) {
+function filterProperties(data, minCostPerSqM, maxCostPerSqM) {
 	return data.filter((property) => {
 		const priceFrom = parseFloat(property['Price From']);
 		const priceTo = property['Price To'];
@@ -247,7 +310,7 @@ function filterProperties(data) {
 
 		// Check if price from and area from are defined (not empty/null)
 		// and price to and area to are empty
-		// Also filter out properties with cost per sq m outside the 400-20,000 range
+		// Also filter out properties with cost per sq m outside the calculated range
 		return (
 			!isNaN(priceFrom) &&
 			priceFrom > 0 &&
@@ -256,8 +319,8 @@ function filterProperties(data) {
 			areaFrom > 20 &&
 			(!areaTo || areaTo.trim() === '') &&
 			hasValidStreet &&
-			costPerSqM >= 400 &&
-			costPerSqM <= 20000
+			costPerSqM >= minCostPerSqM &&
+			costPerSqM <= maxCostPerSqM
 		);
 	});
 }
@@ -1552,10 +1615,20 @@ async function main() {
 			.split(',')
 			.map((h) => h.trim());
 
-		// Filter properties with single price and area values
-		const filteredProperties = filterProperties(allProperties);
+		// Calculate dynamic cost per square meter thresholds (exclude top/bottom 2%)
+		const { minCostPerSqM, maxCostPerSqM } =
+			calculateCostPerSqMThresholds(allProperties);
+
+		// Filter properties with single price and area values using dynamic thresholds
+		const filteredProperties = filterProperties(
+			allProperties,
+			minCostPerSqM,
+			maxCostPerSqM
+		);
 		console.log(
-			`Properties with defined single price and area (€400-20,000/m²): ${filteredProperties.length}`
+			`Properties with defined single price and area (€${Math.round(
+				minCostPerSqM
+			)}-${Math.round(maxCostPerSqM)}/m²): ${filteredProperties.length}`
 		);
 
 		if (filteredProperties.length === 0) {
