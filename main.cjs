@@ -292,14 +292,10 @@ async function scrapeAtHomeLu() {
 										// but typically athome.lu shows single prices
 									}
 
-									// Image URL - get first photo
-									if (
-										appData.media?.photos &&
-										appData.media.photos.length > 0
-									) {
-										// The photos array contains relative paths, need to construct full URL
-										data.imageUrl =
-											'https://static.athome.lu' + appData.media.photos[0];
+									// Image URL - get from DOM using the path from screenshot
+									const imageElement = document.querySelector('div.square img');
+									if (imageElement) {
+										data.imageUrl = imageElement.src;
 									}
 
 									// Location - construct from address object
@@ -518,6 +514,12 @@ async function scrapeAtHomeLu() {
 										getAttribute('.gallery img', 'src') ||
 										getAttribute('[class*="image"] img', 'src') ||
 										getAttribute('img[src*="property"]', 'src');
+
+									// Ensure image URL is properly formatted
+									if (data.imageUrl && !data.imageUrl.startsWith('http')) {
+										data.imageUrl =
+											'https://i1.static.al.athome.lu' + data.imageUrl;
+									}
 
 									// Location
 									const locationText =

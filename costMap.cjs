@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const type = 'for-sale';
-const isUsingOnlyCachedGeocodes = false;
+const isUsingOnlyCachedGeocodes = true;
 
 // Read and parse CSV data
 function parseCSV(filePath) {
@@ -39,13 +39,13 @@ function parseCSV(filePath) {
 
 // Save updated CSV data with geocoded coordinates
 function saveCSVWithCoordinates(filePath, data, originalHeaders) {
-	// Ensure latitude, longitude, geocode address, and eur/sq m headers exist
+	// Ensure Latitude, Longitude, geocode address, and eur/sq m headers exist
 	const headers = [...originalHeaders];
-	if (!headers.includes('latitude')) {
-		headers.push('latitude');
+	if (!headers.includes('Latitude')) {
+		headers.push('Latitude');
 	}
-	if (!headers.includes('longitude')) {
-		headers.push('longitude');
+	if (!headers.includes('Longitude')) {
+		headers.push('Longitude');
 	}
 	if (!headers.includes('Geocode address')) {
 		headers.push('Geocode address');
@@ -142,33 +142,33 @@ function validateAddress(address) {
 
 	// Reject if it's a problematic prefix
 	if (problematicPrefixes.includes(streetUpper)) {
-		console.log(
-			`⚠️  Rejected address with invalid street: "${streetPart}". address: ${address}`
-		);
+		// console.log(
+		// 	`⚠️  Rejected address with invalid street: "${streetPart}". address: ${address}`
+		// );
 		return false;
 	}
 
 	// Reject if it's too short (less than 3 characters, likely a code)
 	if (streetPart.length < 3) {
-		console.log(
-			`⚠️  Rejected address with too short street: "${streetPart}" . address: ${address}`
-		);
+		// console.log(
+		// 	`⚠️  Rejected address with too short street: "${streetPart}" . address: ${address}`
+		// );
 		return false;
 	}
 
 	// Reject if it's all caps and very short (likely a code like "ABC")
 	if (/^[A-Z]{1,3}$/.test(streetPart)) {
-		console.log(
-			`⚠️  Rejected address with code-like street: "${streetPart}". address: ${address}`
-		);
+		// console.log(
+		// 	`⚠️  Rejected address with code-like street: "${streetPart}". address: ${address}`
+		// );
 		return false;
 	}
 
 	// Reject if it's just numbers (postal codes aren't streets)
 	if (/^\d+$/.test(streetPart)) {
-		console.log(
-			`⚠️  Rejected address starting with just numbers: "${streetPart}". address: ${address}`
-		);
+		// console.log(
+		// 	`⚠️  Rejected address starting with just numbers: "${streetPart}". address: ${address}`
+		// );
 		return false;
 	}
 
@@ -210,17 +210,17 @@ function validateAddress(address) {
 	const isCityName = commonCityNames.includes(streetPart.toLowerCase());
 
 	if (isCityName && !hasStreetNumber && !hasStreetIndicators) {
-		console.log(
-			`⚠️  Rejected address that appears to be just a city name: "${streetPart}". address: ${address}`
-		);
+		// console.log(
+		// 	`⚠️  Rejected address that appears to be just a city name: "${streetPart}". address: ${address}`
+		// );
 		return false;
 	}
 
 	// Must contain at least one letter (streets should have names)
 	if (!/[a-zA-Z]/.test(streetPart)) {
-		console.log(
-			`⚠️  Rejected address with no letters in street: "${streetPart}". address: ${address}`
-		);
+		// console.log(
+		// 	`⚠️  Rejected address with no letters in street: "${streetPart}". address: ${address}`
+		// );
 		return false;
 	}
 
@@ -860,38 +860,40 @@ async function geocodeAllProperties(properties, allProperties) {
 
 	for (let i = 0; i < properties.length; i++) {
 		const property = properties[i];
-		console.log(
-			`Geocoding ${i + 1}/${properties.length}: ${property.Location}`
-		);
+		if (!isUsingOnlyCachedGeocodes) {
+			console.log(
+				`Geocoding ${i + 1}/${properties.length}: ${property.Location}`
+			);
+		}
 
 		let coords;
 
 		// Check if coordinates are already cached in the CSV
 		if (
-			property.latitude &&
-			property.longitude &&
-			!isNaN(parseFloat(property.latitude)) &&
-			!isNaN(parseFloat(property.longitude))
+			property.Latitude &&
+			property.Longitude &&
+			!isNaN(parseFloat(property.Latitude)) &&
+			!isNaN(parseFloat(property.Longitude))
 		) {
 			coords = {
-				lat: parseFloat(property.latitude),
-				lng: parseFloat(property.longitude),
+				lat: parseFloat(property.Latitude),
+				lng: parseFloat(property.Longitude),
 				display_name: property.geocoded_address || property.Location,
 				successful_address: property['Geocode address'] || property.Location,
 			};
 			cachedCount++;
-			console.log(
-				`✓ Using cached coordinates: ${coords.lat.toFixed(
-					4
-				)}, ${coords.lng.toFixed(4)}`
-			);
+			// console.log(
+			// 	`✓ Using cached coordinates: ${coords.lat.toFixed(
+			// 		4
+			// 	)}, ${coords.lng.toFixed(4)}`
+			// );
 		} else if (!isUsingOnlyCachedGeocodes) {
 			// Geocode the address only if not using cached-only mode
 			coords = await geocodeAddress(property.Location);
 			if (coords) {
 				// Update the property with new coordinates and successful address for caching
-				property.latitude = coords.lat.toString();
-				property.longitude = coords.lng.toString();
+				property.Latitude = coords.lat.toString();
+				property.Longitude = coords.lng.toString();
 				property['Geocode address'] = coords.successful_address;
 
 				// Find and update the original property in allProperties array
@@ -902,8 +904,8 @@ async function geocodeAllProperties(properties, allProperties) {
 						p['Area From'] === property['Area From']
 				);
 				if (originalProperty) {
-					originalProperty.latitude = coords.lat.toString();
-					originalProperty.longitude = coords.lng.toString();
+					originalProperty.Latitude = coords.lat.toString();
+					originalProperty.Longitude = coords.lng.toString();
 					originalProperty['Geocode address'] = coords.successful_address;
 				}
 
@@ -925,9 +927,9 @@ async function geocodeAllProperties(properties, allProperties) {
 			}
 		} else {
 			// Skip geocoding when using cached-only mode
-			console.log(
-				`⏭️ Skipping geocoding (cached-only mode): ${property.Location}`
-			);
+			// console.log(
+			// 	`⏭️ Skipping geocoding (cached-only mode): ${property.Location}`
+			// );
 			coords = null;
 		}
 
@@ -937,14 +939,24 @@ async function geocodeAllProperties(properties, allProperties) {
 				lat: coords.lat,
 				lng: coords.lng,
 				geocoded_address: coords.display_name || property.Location,
-				successful_geocode_address: coords.successful_address,
+				successfulGeocodeAddress: coords.successful_address,
 			});
 
 			// Progressive delay based on success rate to be respectful to the service
 			// No delay needed for cached results
-			if (!property.latitude && i < properties.length - 1) {
+			if (!property.Latitude && i < properties.length - 1) {
 				await new Promise((resolve) => setTimeout(resolve, 800));
 			}
+		} else {
+			// Even without coordinates, include the property for cost analysis
+			// This allows us to perform analysis even when geocoding is disabled or fails
+			geocodedProperties.push({
+				...property,
+				lat: null,
+				lng: null,
+				geocoded_address: property.Location,
+				successfulGeocodeAddress: null,
+			});
 		}
 	}
 
@@ -1351,7 +1363,11 @@ function generateHeatMap(properties) {
         console.log('Dynamic range:', 'P10 =', p10Value.toFixed(0), 'P90 =', p90Value.toFixed(0));
         
         // Create optimized heat map data with dynamic intensity scaling
-        const heatData = properties.map(property => {
+        // Filter out properties without coordinates for mapping
+        const mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
+        console.log('Mappable properties with coordinates:', mappableProperties.length, 'out of', properties.length);
+        
+        const heatData = mappableProperties.map(property => {
             // Scale intensity from 0 to 1 based on the P10-P90 range
             let intensity;
             if (property.costPerSqM <= p10Value) {
@@ -1403,7 +1419,7 @@ function generateHeatMap(properties) {
             return '#fc4e2a'; // Red
         }
         
-        properties.forEach(property => {
+        mappableProperties.forEach(property => {
             const color = getMarkerColor(property.costPerSqM);
             const marker = L.circleMarker([property.lat, property.lng], {
                 radius: Math.min(3 + Math.log(property.costPerSqM / 1000) * 0.5, 6),
@@ -1434,9 +1450,9 @@ function generateHeatMap(properties) {
         
         markerGroup.addTo(map);
         
-        // Auto-fit map bounds to show all properties
-        if (properties.length > 0) {
-            const bounds = L.latLngBounds(properties.map(p => [p.lat, p.lng]));
+        // Auto-fit map bounds to show all mappable properties
+        if (mappableProperties.length > 0) {
+            const bounds = L.latLngBounds(mappableProperties.map(p => [p.lat, p.lng]));
             map.fitBounds(bounds, { padding: [20, 20] });
         }
         
@@ -1570,38 +1586,69 @@ async function main() {
 		);
 
 		// Save the updated CSV with geocoded coordinates
-		console.log('\nSaving geocoded coordinates to CSV...');
-		saveCSVWithCoordinates(csvPath, allProperties, originalHeaders);
+		if (!isUsingOnlyCachedGeocodes) {
+			console.log('\nSaving geocoded coordinates to CSV...');
+			saveCSVWithCoordinates(csvPath, allProperties, originalHeaders);
+		}
+
+		// Check if we have geocoded properties with valid cost data
+		console.log(`Geocoded properties count: ${geocodedProperties.length}`);
+		if (geocodedProperties.length === 0) {
+			console.log(
+				'No geocoded properties found. Cannot generate analysis or heat map.'
+			);
+			return;
+		}
+
+		// Verify that properties have costPerSqM
+		const propertiesWithValidCost = geocodedProperties.filter(
+			(p) => p.costPerSqM && !isNaN(p.costPerSqM)
+		);
+		console.log(
+			`Properties with valid cost data: ${propertiesWithValidCost.length}`
+		);
+
+		if (propertiesWithValidCost.length === 0) {
+			console.log('No properties with valid cost per square meter data found.');
+			return;
+		}
+
+		// Use the filtered properties for analysis
+		const validProperties = propertiesWithValidCost;
 
 		// Sort by cost per square meter
-		geocodedProperties.sort((a, b) => b.costPerSqM - a.costPerSqM);
+		validProperties.sort((a, b) => b.costPerSqM - a.costPerSqM);
 
 		// Display analysis results
 		console.log('\nCost per Square Meter Analysis:');
 		console.log('================================');
 		console.log(
 			`Average cost: €${(
-				geocodedProperties.reduce((sum, p) => sum + p.costPerSqM, 0) /
-				geocodedProperties.length
+				validProperties.reduce((sum, p) => sum + p.costPerSqM, 0) /
+				validProperties.length
 			).toFixed(2)} per m²`
 		);
 		console.log(
-			`Median cost: €${geocodedProperties[
-				Math.floor(geocodedProperties.length / 2)
+			`Median cost: €${validProperties[
+				Math.floor(validProperties.length / 2)
 			].costPerSqM.toFixed(2)} per m²`
 		);
 		console.log(
-			`Highest cost: €${geocodedProperties[0].costPerSqM.toFixed(2)} per m²`
+			`Highest cost: €${validProperties[0].costPerSqM.toFixed(2)} per m²`
 		);
 		console.log(
-			`Lowest cost: €${geocodedProperties[
-				geocodedProperties.length - 1
+			`Lowest cost: €${validProperties[
+				validProperties.length - 1
 			].costPerSqM.toFixed(2)} per m²`
 		);
 
 		console.log('\nTop 10 Most Expensive Properties per m²:');
 		console.log('==========================================');
-		geocodedProperties.slice(0, 10).forEach((property, index) => {
+		validProperties.slice(0, 10).forEach((property, index) => {
+			const coordsDisplay =
+				property.lat != null && property.lng != null
+					? `Coords: ${property.lat.toFixed(4)}, ${property.lng.toFixed(4)}`
+					: 'Coords: N/A (not geocoded)';
 			console.log(
 				`${index + 1}. €${property.costPerSqM.toFixed(2)}/m² - ${
 					property.Location
@@ -1610,17 +1657,21 @@ async function main() {
 			console.log(
 				`   Price: €${property.priceFrom.toLocaleString()}, Area: ${
 					property.areaFrom
-				}m² - Coords: ${property.lat.toFixed(4)}, ${property.lng.toFixed(4)}`
+				}m² - ${coordsDisplay}`
 			);
 			console.log('');
 		});
 
 		console.log('\nTop 10 Most Affordable Properties per m²:');
 		console.log('==========================================');
-		geocodedProperties
+		validProperties
 			.slice(-10)
 			.reverse()
 			.forEach((property, index) => {
+				const coordsDisplay =
+					property.lat != null && property.lng != null
+						? `Coords: ${property.lat.toFixed(4)}, ${property.lng.toFixed(4)}`
+						: 'Coords: N/A (not geocoded)';
 				console.log(
 					`${index + 1}. €${property.costPerSqM.toFixed(2)}/m² - ${
 						property.Location
@@ -1629,27 +1680,45 @@ async function main() {
 				console.log(
 					`   Price: €${property.priceFrom.toLocaleString()}, Area: ${
 						property.areaFrom
-					}m² - Coords: ${property.lat.toFixed(4)}, ${property.lng.toFixed(4)}`
+					}m² - ${coordsDisplay}`
 				);
 				console.log('');
 			});
 
 		// Generate HTML heat map with real coordinates
-		const htmlContent = generateHeatMap(geocodedProperties);
+		const htmlContent = generateHeatMap(validProperties);
 		const outputPath = path.join(__dirname, `${type}-heatmap.html`);
 		fs.writeFileSync(outputPath, htmlContent);
 
+		const mappableCount = validProperties.filter(
+			(p) => p.lat != null && p.lng != null
+		).length;
 		console.log(`\nHeat map generated: ${outputPath}`);
-		console.log(
-			'Open this file in a web browser to view the interactive heat map.'
-		);
+		if (mappableCount > 0) {
+			console.log(
+				`Heat map contains ${mappableCount} properties with coordinates out of ${validProperties.length} total properties.`
+			);
+			console.log(
+				'Open this file in a web browser to view the interactive heat map.'
+			);
+		} else {
+			console.log(
+				'⚠️  Heat map was generated but contains no mappable properties (no coordinates available).'
+			);
+			console.log(
+				'The file will still show the analysis statistics. To see properties on the map,'
+			);
+			console.log(
+				'run with geocoding enabled (set isUsingOnlyCachedGeocodes = false) or provide geocoded data.'
+			);
+		}
 
 		// Save processed data as JSON
 		const jsonPath = path.join(__dirname, 'processed_real_estate_data.json');
-		fs.writeFileSync(jsonPath, JSON.stringify(geocodedProperties, null, 2));
+		fs.writeFileSync(jsonPath, JSON.stringify(validProperties, null, 2));
 		console.log(`Processed data saved: ${jsonPath}`);
 	} catch (error) {
-		console.error('Error processing data:', error.message);
+		console.error('Error processing data:', error);
 	}
 }
 
