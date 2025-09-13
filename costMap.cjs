@@ -1,8 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 
-// const type = 'for-sale';
-const type = 'for-rent';
+const type = 'for-sale';
+// const type = 'for-rent';
+const outlierThreshold = 0.04;
 
 const isUsingOnlyCachedGeocodes = true;
 
@@ -229,7 +230,7 @@ function validateAddress(address) {
 	return true;
 }
 
-// Calculate cost per square meter percentiles to determine outlier thresholds
+// Calculate cost per square meter percentiles to filter out extreme values
 function calculateCostPerSqMThresholds(data) {
 	// First, get all valid cost per square meter values
 	const validCosts = [];
@@ -270,27 +271,27 @@ function calculateCostPerSqMThresholds(data) {
 		return { minCostPerSqM: 0, maxCostPerSqM: Infinity };
 	}
 
-	// Sort costs and calculate 2nd and 98th percentiles
+	// Sort costs and calculate 2nd and 98th percentiles to remove extreme outliers
 	validCosts.sort((a, b) => a - b);
 	const count = validCosts.length;
 
-	const p2Index = Math.floor(count * 0.02);
-	const p98Index = Math.floor(count * 0.98);
+	const p2Index = Math.floor(count * outlierThreshold);
+	const p98Index = Math.floor(count * (1 - outlierThreshold));
 
 	const minCostPerSqM = validCosts[p2Index];
 	const maxCostPerSqM = validCosts[p98Index];
 
 	console.log(
-		`Cost per sqM thresholds (excluding top/bottom 2%): €${minCostPerSqM.toFixed(
-			0
-		)} - €${maxCostPerSqM.toFixed(0)}`
+		`Cost per sqM range (excluding top/bottom ${
+			outlierThreshold * 100
+		}%): €${minCostPerSqM.toFixed(0)} - €${maxCostPerSqM.toFixed(0)}`
 	);
-	console.log(`Total valid properties for threshold calculation: ${count}`);
+	console.log(`Total valid properties for range calculation: ${count}`);
 
 	return { minCostPerSqM, maxCostPerSqM };
 }
 
-// Filter properties with price from and area from but no price to and area to
+// Filter properties with price from and area from but no price to and area to, excluding extreme outliers
 function filterProperties(data, minCostPerSqM, maxCostPerSqM) {
 	return data.filter((property) => {
 		const priceFrom = parseFloat(property['Price From']);
@@ -310,7 +311,7 @@ function filterProperties(data, minCostPerSqM, maxCostPerSqM) {
 
 		// Check if price from and area from are defined (not empty/null)
 		// and price to and area to are empty
-		// Also filter out properties with cost per sq m outside the calculated range
+		// Remove only the top/bottom 2% extreme outliers, treat the rest normally
 		return (
 			!isNaN(priceFrom) &&
 			priceFrom > 0 &&
@@ -1039,17 +1040,7 @@ function generateHeatMap(properties) {
 	const maxCost = Math.max(...costs);
 	const avgCost = costs.reduce((sum, cost) => sum + cost, 0) / costs.length;
 
-	// Calculate dynamic range based on percentiles
-	const p10Index = Math.floor(sortedCosts.length * 0.1);
-	const p90Index = Math.floor(sortedCosts.length * 0.9);
-	const p10Value = sortedCosts[p10Index];
-	const p90Value = sortedCosts[p90Index];
-
-	console.log(
-		`Dynamic range: 10th percentile = €${p10Value.toFixed(
-			0
-		)}, 90th percentile = €${p90Value.toFixed(0)}`
-	);
+	console.log(`Cost range: €${minCost.toFixed(0)} - €${maxCost.toFixed(0)}`);
 
 	const html = `<!DOCTYPE html>
 <html lang="en">
@@ -1270,12 +1261,40 @@ function generateHeatMap(properties) {
             display: block;
             margin-bottom: 4px;
         }
+        
+        .property-link {
+            color: #3498db;
+            text-decoration: none;
+            cursor: pointer;
+            font-size: 12px;
+            margin-top: 8px;
+            display: inline-block;
+            padding: 4px 8px;
+            background: #ecf0f1;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        
+        .property-link:hover {
+            background: #3498db;
+            color: white;
+        }
+        
+        @keyframes blink {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.3; transform: scale(1.2); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+        
+        .marker-highlight {
+            animation: blink 0.8s ease-in-out 4;
+        }
     </style>
 </head>
 <body>
     <div class="info-panel">
-        <h3>🏠 Real Estate Analysis</h3>
-        
+        <h3>🏠 ${type == 'for-rent' ? 'For Rent' : 'For Sale'} Analysis</h3>
+
         <div class="stats-grid">
             <div class="stat-item">
                 <span class="stat-value">${properties.length.toLocaleString()}</span>
@@ -1310,13 +1329,23 @@ function generateHeatMap(properties) {
             ${properties
 							.slice(0, 8)
 							.map(
-								(property) => `
+								(property, index) => `
                 <div class="property-item">
                     <strong>€${property.costPerSqM.toFixed(0)}/m²</strong>
                     ${property.Location.split(',')[0]}<br>
                     <span style="color: #6c757d;">€${property.priceFrom.toLocaleString()} / ${
 									property.areaFrom
 								}m²</span>
+                    ${
+											property.lat && property.lng
+												? `<br><a href="javascript:void(0)" class="property-link" onclick="centerOnProperty(${property.lat}, ${property.lng}, ${index})">📍 Show on Map</a>`
+												: ''
+										}
+                    ${
+											property.URL
+												? `<br><a href="${property.URL}" target="_blank" rel="noopener" class="property-link">🔗 Original Listing</a>`
+												: ''
+										}
                 </div>
             `
 							)
@@ -1343,53 +1372,41 @@ function generateHeatMap(properties) {
         <h4>💰 Cost per m²</h4>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #ffffcc, #ffeda0);"></div>
-            <span>€${Math.round(p10Value).toLocaleString()} - €${Math.round(
-		p10Value + (p90Value - p10Value) * 0.2
+            <span>€${Math.round(minCost).toLocaleString()} - €${Math.round(
+		minCost + (maxCost - minCost) * 0.2
 	).toLocaleString()}</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #ffeda0, #fed976);"></div>
             <span>€${Math.round(
-							p10Value + (p90Value - p10Value) * 0.2
+							minCost + (maxCost - minCost) * 0.2
 						).toLocaleString()} - €${Math.round(
-		p10Value + (p90Value - p10Value) * 0.4
+		minCost + (maxCost - minCost) * 0.4
 	).toLocaleString()}</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #fed976, #feb24c);"></div>
             <span>€${Math.round(
-							p10Value + (p90Value - p10Value) * 0.4
+							minCost + (maxCost - minCost) * 0.4
 						).toLocaleString()} - €${Math.round(
-		p10Value + (p90Value - p10Value) * 0.55
+		minCost + (maxCost - minCost) * 0.6
 	).toLocaleString()}</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #feb24c, #fd8d3c);"></div>
             <span>€${Math.round(
-							p10Value + (p90Value - p10Value) * 0.55
+							minCost + (maxCost - minCost) * 0.6
 						).toLocaleString()} - €${Math.round(
-		p10Value + (p90Value - p10Value) * 0.7
+		minCost + (maxCost - minCost) * 0.8
 	).toLocaleString()}</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background: linear-gradient(90deg, #fd8d3c, #fc4e2a);"></div>
             <span>€${Math.round(
-							p10Value + (p90Value - p10Value) * 0.7
+							minCost + (maxCost - minCost) * 0.8
 						).toLocaleString()} - €${Math.round(
-		p10Value + (p90Value - p10Value) * 0.85
+		maxCost
 	).toLocaleString()}</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: linear-gradient(90deg, #fc4e2a, #e31a1c);"></div>
-            <span>€${Math.round(
-							p10Value + (p90Value - p10Value) * 0.85
-						).toLocaleString()} - €${Math.round(
-		p90Value
-	).toLocaleString()}</span>
-        </div>
-        <div class="legend-item" style="opacity: 0.7;">
-            <div class="legend-color" style="background: #666;"></div>
-            <span>Outliers (Top/Bottom 10%)</span>
         </div>
     </div>
 
@@ -1416,78 +1433,63 @@ function generateHeatMap(properties) {
         // Property data with real geocoded coordinates
         const properties = ${JSON.stringify(properties)};
         
-        // Calculate dynamic percentiles for adaptive coloring
+        // Calculate range for simple linear scaling
         const costs = properties.map(p => p.costPerSqM);
-        const sortedCosts = [...costs].sort((a, b) => a - b);
-        const p10Value = sortedCosts[Math.floor(sortedCosts.length * 0.1)];
-        const p90Value = sortedCosts[Math.floor(sortedCosts.length * 0.9)];
+        const minCost = Math.min(...costs);
+        const maxCost = Math.max(...costs);
         
         console.log('Loaded', properties.length, 'properties with real coordinates');
-        console.log('Dynamic range:', 'P10 =', p10Value.toFixed(0), 'P90 =', p90Value.toFixed(0));
+        console.log('Cost range:', 'Min =', minCost.toFixed(0), 'Max =', maxCost.toFixed(0));
         
-        // Create optimized heat map data with dynamic intensity scaling
+        // Create heat map data with simple linear intensity scaling
         // Filter out properties without coordinates for mapping
         const mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
         console.log('Mappable properties with coordinates:', mappableProperties.length, 'out of', properties.length);
         
         const heatData = mappableProperties.map(property => {
-            // Scale intensity from 0 to 1 based on the P10-P90 range
-            let intensity;
-            if (property.costPerSqM <= p10Value) {
-                intensity = 0.05; // Very low intensity for bottom 10%
-            } else if (property.costPerSqM >= p90Value) {
-                intensity = 1.0; // Maximum intensity for top 10%
-            } else {
-                // Linear scaling between P10 and P90
-                intensity = (property.costPerSqM - p10Value) / (p90Value - p10Value);
-                intensity = Math.max(0.05, Math.min(1.0, intensity)); // Clamp between 0.05 and 1.0
-            }
+            // Simple linear scaling from 0.1 to 1.0 based on cost range
+            const intensity = Math.max(0.1, (property.costPerSqM - minCost) / (maxCost - minCost));
             return [property.lat, property.lng, intensity];
         });
 
-        // Create heat layer with dynamic gradient configuration
+        // Create heat layer with simple gradient
         let heatLayer = L.heatLayer(heatData, {
             radius: 25,
             blur: 15,
             maxZoom: 17,
             max: 1.0,
             gradient: {
-                0.0: 'rgba(204,204,204,0.3)',    // Gray for outliers
-                0.05: 'rgba(255,255,204,0.6)',   // Light yellow (P10)
+                0.0: 'rgba(255,255,204,0.6)',   // Light yellow (low cost)
                 0.2: 'rgba(255,237,160,0.7)',    // Yellow
                 0.4: 'rgba(254,217,118,0.7)',    // Orange-yellow  
-                0.55: 'rgba(254,178,76,0.8)',    // Orange
-                0.7: 'rgba(253,141,60,0.8)',     // Red-orange
-                0.85: 'rgba(252,78,42,0.9)',     // Red
-                1.0: 'rgba(227,26,28,1.0)'       // Deep red (P90)
+                0.6: 'rgba(254,178,76,0.8)',     // Orange
+                0.8: 'rgba(253,141,60,0.8)',     // Red-orange
+                1.0: 'rgba(227,26,28,1.0)'       // Deep red (high cost)
             }
         }).addTo(map);
 
         // Create marker clusters for better performance
         let markerGroup = L.layerGroup();
+        let propertyMarkers = []; // Store markers for individual access
         
-        // Add markers for properties with different colors based on dynamic cost ranges
+        // Add markers for properties with different colors based on cost ranges
         function getMarkerColor(costPerSqM) {
-            if (costPerSqM <= p10Value) return '#cccccc'; // Gray for bottom 10%
-            if (costPerSqM >= p90Value) return '#e31a1c'; // Deep red for top 10%
-            
-            // Calculate position within P10-P90 range
-            const position = (costPerSqM - p10Value) / (p90Value - p10Value);
+            // Simple linear scaling based on cost range
+            const position = (costPerSqM - minCost) / (maxCost - minCost);
             
             if (position < 0.2) return '#ffffcc'; // Light yellow
             if (position < 0.4) return '#ffeda0'; // Yellow
-            if (position < 0.55) return '#fed976'; // Orange-yellow
-            if (position < 0.7) return '#feb24c'; // Orange
-            if (position < 0.85) return '#fd8d3c'; // Red-orange
-            return '#fc4e2a'; // Red
+            if (position < 0.6) return '#fed976'; // Orange-yellow
+            if (position < 0.8) return '#feb24c'; // Orange
+            return '#fd8d3c'; // Red-orange
         }
         
-        mappableProperties.forEach(property => {
+        mappableProperties.forEach((property, index) => {
             const color = getMarkerColor(property.costPerSqM);
             const marker = L.circleMarker([property.lat, property.lng], {
-                radius: Math.min(3 + Math.log(property.costPerSqM / 1000) * 0.5, 6),
+                radius: 8,
                 fillColor: color,
-                color: '#ffffff',
+                color,
                 weight: 1,
                 opacity: 0.9,
                 fillOpacity: 0.7
@@ -1509,6 +1511,11 @@ function generateHeatMap(properties) {
             
             marker.bindPopup(popupContent);
             markerGroup.addLayer(marker);
+            
+            // Store marker for individual access (only for top 8 properties shown in list)
+            if (index < 8) {
+                propertyMarkers[index] = marker;
+            }
         });
         
         markerGroup.addTo(map);
@@ -1517,6 +1524,39 @@ function generateHeatMap(properties) {
         if (mappableProperties.length > 0) {
             const bounds = L.latLngBounds(mappableProperties.map(p => [p.lat, p.lng]));
             map.fitBounds(bounds, { padding: [20, 20] });
+        }
+        
+        // Function to center map on property and highlight marker
+        function centerOnProperty(lat, lng, markerIndex) {
+            // Center map on the property
+            map.setView([lat, lng], 15);
+            
+            // Get the marker element and add highlight animation
+            if (propertyMarkers[markerIndex]) {
+                const marker = propertyMarkers[markerIndex];
+                
+                // Remove any existing highlight class
+                if (marker._path) {
+                    marker._path.classList.remove('marker-highlight');
+                }
+                
+                // Add highlight animation
+                setTimeout(() => {
+                    if (marker._path) {
+                        marker._path.classList.add('marker-highlight');
+                    }
+                }, 100);
+                
+                // Remove highlight after animation completes
+                setTimeout(() => {
+                    if (marker._path) {
+                        marker._path.classList.remove('marker-highlight');
+                    }
+                }, 3100); // 3 seconds animation + 0.1 second delay
+                
+                // Open popup
+                marker.openPopup();
+            }
         }
         
         // Control functions
@@ -1546,14 +1586,12 @@ function generateHeatMap(properties) {
                 maxZoom: 17,
                 max: 1.0,
                 gradient: {
-                    0.0: 'rgba(204,204,204,0.3)',    // Gray for outliers
-                    0.05: 'rgba(255,255,204,0.6)',   // Light yellow (P10)
+                    0.0: 'rgba(255,255,204,0.6)',   // Light yellow (low cost)
                     0.2: 'rgba(255,237,160,0.7)',    // Yellow
                     0.4: 'rgba(254,217,118,0.7)',    // Orange-yellow  
-                    0.55: 'rgba(254,178,76,0.8)',    // Orange
-                    0.7: 'rgba(253,141,60,0.8)',     // Red-orange
-                    0.85: 'rgba(252,78,42,0.9)',     // Red
-                    1.0: 'rgba(227,26,28,1.0)'       // Deep red (P90)
+                    0.6: 'rgba(254,178,76,0.8)',     // Orange
+                    0.8: 'rgba(253,141,60,0.8)',     // Red-orange
+                    1.0: 'rgba(227,26,28,1.0)'       // Deep red (high cost)
                 }
             });
             if (document.getElementById('showHeat').checked) {
