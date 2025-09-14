@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const type = 'for-sale';
-// const type = 'for-rent';
+// const type = 'for-sale';
+const type = 'for-rent';
 const outlierThreshold = 0.04;
 
 const isUsingOnlyCachedGeocodes = true;
@@ -1040,6 +1040,30 @@ function generateHeatMap(properties) {
 	const maxCost = Math.max(...costs);
 	const avgCost = costs.reduce((sum, cost) => sum + cost, 0) / costs.length;
 
+	// Calculate statistics for other metrics
+	const prices = properties
+		.map((p) => p.priceFrom)
+		.filter((p) => !isNaN(p) && p > 0);
+	const areas = properties
+		.map((p) => p.areaFrom)
+		.filter((a) => !isNaN(a) && a > 0);
+	const charges = properties
+		.map((p) => parseFloat(p.Charges))
+		.filter((c) => !isNaN(c) && c > 0);
+
+	const avgPrice =
+		prices.length > 0
+			? prices.reduce((sum, price) => sum + price, 0) / prices.length
+			: 0;
+	const avgArea =
+		areas.length > 0
+			? areas.reduce((sum, area) => sum + area, 0) / areas.length
+			: 0;
+	const avgCharges =
+		charges.length > 0
+			? charges.reduce((sum, charge) => sum + charge, 0) / charges.length
+			: 0;
+
 	console.log(`Cost range: €${minCost.toFixed(0)} - €${maxCost.toFixed(0)}`);
 
 	const html = `<!DOCTYPE html>
@@ -1159,11 +1183,12 @@ function generateHeatMap(properties) {
             right: 20px;
             background: rgba(255, 255, 255, 0.95);
             backdrop-filter: blur(10px);
-            padding: 15px;
+            padding: 20px;
             border-radius: 12px;
             box-shadow: 0 8px 32px rgba(0,0,0,0.1);
             z-index: 1000;
             border: 1px solid rgba(255,255,255,0.2);
+            min-width: 220px;
         }
         
         .control-item {
@@ -1175,6 +1200,51 @@ function generateHeatMap(properties) {
         
         .control-item input {
             margin-right: 8px;
+        }
+        
+        .control-item select {
+            margin-right: 8px;
+            padding: 8px 12px;
+            border: 2px solid #3498db;
+            border-radius: 6px;
+            background: white;
+            font-size: 14px;
+            font-weight: 500;
+            flex: 1;
+            color: #2c3e50;
+            transition: all 0.3s ease;
+        }
+        
+        .control-item select:disabled {
+            background: #f8f9fa;
+            color: #6c757d;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+        
+        .control-item input[type="range"]:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .control-item input[type="range"]:disabled::-webkit-slider-thumb {
+            background: #adb5bd;
+            cursor: not-allowed;
+        }
+        
+        .control-item input[type="range"]:disabled::-moz-range-thumb {
+            background: #adb5bd;
+            cursor: not-allowed;
+        }
+        
+        .control-label {
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 8px;
+            font-size: 14px;
+            display: block;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
         .leaflet-popup-content {
@@ -1289,9 +1359,68 @@ function generateHeatMap(properties) {
         .marker-highlight {
             animation: blink 0.8s ease-in-out 4;
         }
+        
+        /* Spinner styles */
+        .spinner-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            display: none;
+        }
+        
+        .spinner-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 30px;
+            text-align: center;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 4px solid #3498db;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .spinner-text {
+            color: #2c3e50;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        
+        .spinner-subtext {
+            color: #6c757d;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
+    <div class="spinner-overlay" id="spinnerOverlay">
+        <div class="spinner-container">
+            <div class="spinner"></div>
+            <div class="spinner-text" id="spinnerText">Updating Visualization...</div>
+            <div class="spinner-subtext" id="spinnerSubtext">Please wait while we recalculate the map data</div>
+        </div>
+    </div>
     <div class="info-panel">
         <h3>🏠 ${type == 'for-rent' ? 'For Rent' : 'For Sale'} Analysis</h3>
 
@@ -1355,6 +1484,16 @@ function generateHeatMap(properties) {
 
     <div class="controls">
         <div class="control-item">
+            <label class="control-label">🎯 Coloring By:</label>
+            <select id="heatmapType" onchange="changeHeatmapType(this.value)">
+                <option value="costPerSqm" selected>Cost per m²</option>
+                <option value="cost">Total Cost</option>
+                <option value="area">Area</option>
+                <option value="charges">Charges</option>
+                <option value="energyClass">Energy Class</option>
+            </select>
+        </div>
+        <div class="control-item">
             <input type="checkbox" id="showHeat" checked onchange="toggleHeatLayer()">
             <label for="showHeat">Heat Layer</label>
         </div>
@@ -1369,44 +1508,9 @@ function generateHeatMap(properties) {
     </div>
 
     <div class="legend">
-        <h4>💰 Cost per m²</h4>
-        <div class="legend-item">
-            <div class="legend-color" style="background: linear-gradient(90deg, #ffffcc, #ffeda0);"></div>
-            <span>€${Math.round(minCost).toLocaleString()} - €${Math.round(
-		minCost + (maxCost - minCost) * 0.2
-	).toLocaleString()}</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: linear-gradient(90deg, #ffeda0, #fed976);"></div>
-            <span>€${Math.round(
-							minCost + (maxCost - minCost) * 0.2
-						).toLocaleString()} - €${Math.round(
-		minCost + (maxCost - minCost) * 0.4
-	).toLocaleString()}</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: linear-gradient(90deg, #fed976, #feb24c);"></div>
-            <span>€${Math.round(
-							minCost + (maxCost - minCost) * 0.4
-						).toLocaleString()} - €${Math.round(
-		minCost + (maxCost - minCost) * 0.6
-	).toLocaleString()}</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: linear-gradient(90deg, #feb24c, #fd8d3c);"></div>
-            <span>€${Math.round(
-							minCost + (maxCost - minCost) * 0.6
-						).toLocaleString()} - €${Math.round(
-		minCost + (maxCost - minCost) * 0.8
-	).toLocaleString()}</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: linear-gradient(90deg, #fd8d3c, #fc4e2a);"></div>
-            <span>€${Math.round(
-							minCost + (maxCost - minCost) * 0.8
-						).toLocaleString()} - €${Math.round(
-		maxCost
-	).toLocaleString()}</span>
+        <h4 id="legendTitle">💰 Cost per m²</h4>
+        <div id="legendItems">
+            <!-- Legend items will be dynamically generated -->
         </div>
     </div>
 
@@ -1433,24 +1537,178 @@ function generateHeatMap(properties) {
         // Property data with real geocoded coordinates
         const properties = ${JSON.stringify(properties)};
         
-        // Calculate range for simple linear scaling
-        const costs = properties.map(p => p.costPerSqM);
+        // Store current heatmap type
+        let currentHeatmapType = 'costPerSqm';
+        
+        // Calculate range for different metrics
+        const costs = properties.map(p => p.costPerSqM).filter(c => !isNaN(c) && c > 0);
+        const prices = properties.map(p => p.priceFrom).filter(p => !isNaN(p) && p > 0);
+        const areas = properties.map(p => p.areaFrom).filter(a => !isNaN(a) && a > 0);
+        const charges = properties.map(p => parseFloat(p.Charges || 0)).filter(c => !isNaN(c) && c >= 0);
+        
+        // For charges range calculation, exclude 0 values for better outlier detection
+        const nonZeroCharges = charges.filter(c => c > 0);
+        
+        // Energy class mapping (A=1, B=2, etc.)
+        const energyClassMap = { 'A': 1, 'B': 2, 'C': 3, 'D': 4, 'E': 5, 'F': 6, 'G': 7, 'NC': 4 };
+        const energyClasses = properties.map(p => {
+            const energyClass = p['Energy Class'] || 'NC';
+            return energyClassMap[energyClass] || 4; // Default to D (4) if unknown
+        }).filter(e => !isNaN(e));
+        
+        const ranges = {
+            costPerSqm: costs.length > 0 ? { min: Math.min(...costs), max: Math.max(...costs) } : { min: 0, max: 100 },
+            cost: prices.length > 0 ? { min: Math.min(...prices), max: Math.max(...prices) } : { min: 0, max: 10000 },
+            area: areas.length > 0 ? { min: Math.min(...areas), max: Math.max(...areas) } : { min: 0, max: 200 },
+            charges: nonZeroCharges.length > 0 ? { min: Math.min(...nonZeroCharges), max: Math.max(...nonZeroCharges) } : { min: 0, max: 500 },
+            energyClass: { min: 1, max: 7 } // A to G scale
+        };
+        
         const minCost = Math.min(...costs);
         const maxCost = Math.max(...costs);
         
         console.log('Loaded', properties.length, 'properties with real coordinates');
         console.log('Cost range:', 'Min =', minCost.toFixed(0), 'Max =', maxCost.toFixed(0));
         
+        // Spinner control functions
+        function showSpinner(text = 'Updating Visualization...', subtext = 'Please wait while we recalculate the map data') {
+            const overlay = document.getElementById('spinnerOverlay');
+            const textElement = document.getElementById('spinnerText');
+            const subtextElement = document.getElementById('spinnerSubtext');
+            const heatmapTypeSelect = document.getElementById('heatmapType');
+            const heatRadiusSlider = document.getElementById('heatRadius');
+            
+            textElement.textContent = text;
+            subtextElement.textContent = subtext;
+            overlay.style.display = 'flex';
+            
+            // Disable controls during processing
+            if (heatmapTypeSelect) heatmapTypeSelect.disabled = true;
+            if (heatRadiusSlider) heatRadiusSlider.disabled = true;
+        }
+        
+        function hideSpinner() {
+            const overlay = document.getElementById('spinnerOverlay');
+            const heatmapTypeSelect = document.getElementById('heatmapType');
+            const heatRadiusSlider = document.getElementById('heatRadius');
+            
+            overlay.style.display = 'none';
+            
+            // Re-enable controls
+            if (heatmapTypeSelect) heatmapTypeSelect.disabled = false;
+            if (heatRadiusSlider) heatRadiusSlider.disabled = false;
+        }
+        
+        // Function to get value for current heatmap type
+        function getValueForType(property, type) {
+            switch(type) {
+                case 'costPerSqm':
+                    return property.costPerSqM || 0;
+                case 'cost':
+                    return property.priceFrom || 0;
+                case 'area':
+                    return property.areaFrom || 0;
+                case 'charges':
+                    const charges = parseFloat(property.Charges || 0);
+                    return isNaN(charges) ? 0 : charges;
+                case 'energyClass':
+                    const energyClass = property['Energy Class'] || 'NC';
+                    return energyClassMap[energyClass] || 4;
+                default:
+                    return property.costPerSqM || 0;
+            }
+        }
+        
+        // Function to check if property has valid data for a given type
+        function hasValidDataForType(property, type) {
+            const value = getValueForType(property, type);
+            switch(type) {
+                case 'costPerSqm':
+                    return !isNaN(value) && value > 0;
+                case 'cost':
+                    return !isNaN(value) && value > 0;
+                case 'area':
+                    return !isNaN(value) && value > 0;
+                case 'charges':
+                    return !isNaN(value) && value > 0; // Only show properties with positive charges
+                case 'energyClass':
+                    return true; // Show all properties, even NC ones
+                default:
+                    return !isNaN(value) && value > 0;
+            }
+        }
+        
+        // Function to create heat data for a specific type
+        function createHeatData(type) {
+            let mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
+            
+            // For charges, only include properties with valid charge data
+            if (type === 'charges') {
+                mappableProperties = mappableProperties.filter(p => hasValidDataForType(p, type));
+            }
+            
+            // Get all valid values for this type to calculate proper ranges
+            let validValues = mappableProperties
+                .filter(p => hasValidDataForType(p, type))
+                .map(p => getValueForType(p, type));
+            
+            if (validValues.length === 0) {
+                console.log('No valid values found for type: ' + type);
+                return [];
+            }
+            
+            // Apply outlier filtering for charges and cost (similar to cost per sqm filtering)
+            let minVal, maxVal;
+            if ((type === 'charges' || type === 'cost') && validValues.length > 10) {
+                // Sort and remove outliers (top/bottom 4% like cost per sqm)
+                validValues.sort((a, b) => a - b);
+                const count = validValues.length;
+                const outlierThreshold = 0.04; // Same as used for cost per sqm
+                
+                const lowIndex = Math.floor(count * outlierThreshold);
+                const highIndex = Math.floor(count * (1 - outlierThreshold));
+                
+                minVal = validValues[lowIndex];
+                maxVal = validValues[highIndex];
+                
+                console.log(type + ' outlier filtering: original range €' + validValues[0] + ' - €' + validValues[count-1] + ', filtered range €' + minVal + ' - €' + maxVal);
+            } else {
+                minVal = Math.min(...validValues);
+                maxVal = Math.max(...validValues);
+            }
+            
+            console.log('Heat data for ' + type + ': min=' + minVal + ', max=' + maxVal + ', count=' + validValues.length);
+            
+            return mappableProperties.map(property => {
+                const value = getValueForType(property, type);
+                let intensity;
+                
+                if (hasValidDataForType(property, type)) {
+                    // For charges and cost with outlier filtering, exclude properties outside the filtered range
+                    if ((type === 'charges' || type === 'cost') && validValues.length > 10 && (value < minVal || value > maxVal)) {
+                        // Skip properties outside the outlier-filtered range
+                        return null;
+                    } else if (maxVal > minVal) {
+                        // Normal intensity calculation for properties with data
+                        intensity = Math.max(0.1, Math.min(1.0, (value - minVal) / (maxVal - minVal)));
+                    } else {
+                        intensity = 0.5; // Fallback when all values are the same
+                    }
+                } else {
+                    // Properties without data are not included for charges and cost outliers
+                    return null;
+                }
+                
+                return [property.lat, property.lng, intensity];
+            }).filter(item => item !== null && !isNaN(item[2]));
+        }
+        
         // Create heat map data with simple linear intensity scaling
         // Filter out properties without coordinates for mapping
         const mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
         console.log('Mappable properties with coordinates:', mappableProperties.length, 'out of', properties.length);
         
-        const heatData = mappableProperties.map(property => {
-            // Simple linear scaling from 0.1 to 1.0 based on cost range
-            const intensity = Math.max(0.1, (property.costPerSqM - minCost) / (maxCost - minCost));
-            return [property.lat, property.lng, intensity];
-        });
+        let heatData = createHeatData(currentHeatmapType);
 
         // Create heat layer with simple gradient
         let heatLayer = L.heatLayer(heatData, {
@@ -1472,10 +1730,60 @@ function generateHeatMap(properties) {
         let markerGroup = L.layerGroup();
         let propertyMarkers = []; // Store markers for individual access
         
-        // Add markers for properties with different colors based on cost ranges
-        function getMarkerColor(costPerSqM) {
-            // Simple linear scaling based on cost range
-            const position = (costPerSqM - minCost) / (maxCost - minCost);
+        // Add markers for properties with different colors based on current heatmap type
+        function getMarkerColor(property, type) {
+            if (!hasValidDataForType(property, type)) {
+                // For charges, don't show properties without data at all
+                if (type === 'charges') {
+                    return null;
+                }
+                return '#cccccc'; // Gray for properties without data (other types)
+            }
+            
+            // Calculate range dynamically for this type
+            let mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
+            
+            // For charges, only include properties with valid charge data
+            if (type === 'charges') {
+                mappableProperties = mappableProperties.filter(p => hasValidDataForType(p, type));
+            }
+            
+            let validValues = mappableProperties
+                .filter(p => hasValidDataForType(p, type))
+                .map(p => getValueForType(p, type));
+            
+            if (validValues.length === 0) {
+                return '#cccccc';
+            }
+            
+            let minVal, maxVal;
+            // Apply outlier filtering for charges and cost (same as in createHeatData)
+            if ((type === 'charges' || type === 'cost') && validValues.length > 10) {
+                validValues.sort((a, b) => a - b);
+                const count = validValues.length;
+                const outlierThreshold = 0.04;
+                
+                const lowIndex = Math.floor(count * outlierThreshold);
+                const highIndex = Math.floor(count * (1 - outlierThreshold));
+                
+                minVal = validValues[lowIndex];
+                maxVal = validValues[highIndex];
+                
+                const value = getValueForType(property, type);
+                
+                // If property is outside filtered range, don't show it
+                if (value < minVal || value > maxVal) {
+                    return null; // Don't render this marker
+                }
+            } else {
+                minVal = Math.min(...validValues);
+                maxVal = Math.max(...validValues);
+            }
+            
+            const value = getValueForType(property, type);
+            
+            // Simple linear scaling based on actual value range
+            const position = maxVal > minVal ? (value - minVal) / (maxVal - minVal) : 0.5;
             
             if (position < 0.2) return '#ffffcc'; // Light yellow
             if (position < 0.4) return '#ffeda0'; // Yellow
@@ -1484,39 +1792,97 @@ function generateHeatMap(properties) {
             return '#fd8d3c'; // Red-orange
         }
         
-        mappableProperties.forEach((property, index) => {
-            const color = getMarkerColor(property.costPerSqM);
-            const marker = L.circleMarker([property.lat, property.lng], {
-                radius: 8,
-                fillColor: color,
-                color,
-                weight: 1,
-                opacity: 0.9,
-                fillOpacity: 0.7
-            });
-            
-            const popupContent = \`
-                <div class="popup-content">
-                    <div class="popup-price">€\${property.costPerSqM.toFixed(0)} per m²</div>
-                    <div class="popup-location">\${property.Location.split(',')[0]}</div>
-                    <div class="popup-details">
-                        <strong>Price:</strong> €\${property.priceFrom.toLocaleString()}<br>
-                        <strong>Area:</strong> \${property.areaFrom} m²<br>
-                        <strong>Location:</strong> \${property.Location}
-                        \${property.URL ? '<br><strong>Listing:</strong> <a href="' + property.URL + '" target="_blank" rel="noopener">View Original</a>' : ''}
-                    </div>
-                    \${property.geocoded_address ? '<div class="popup-address">Geocoded: ' + property.geocoded_address + '</div>' : ''}
-                </div>
-            \`;
-            
-            marker.bindPopup(popupContent);
-            markerGroup.addLayer(marker);
-            
-            // Store marker for individual access (only for top 8 properties shown in list)
-            if (index < 8) {
-                propertyMarkers[index] = marker;
+        // Function to get display text for values
+        function getDisplayText(property, type) {
+            if (!hasValidDataForType(property, type)) {
+                const labels = {
+                    costPerSqm: 'No cost/m² data',
+                    cost: 'No price data',
+                    area: 'No area data',
+                    charges: 'No charges (€0)',
+                    energyClass: 'Not classified'
+                };
+                return labels[type] || 'No data';
             }
-        });
+            
+            const value = getValueForType(property, type);
+            switch(type) {
+                case 'costPerSqm':
+                    return '€' + value.toFixed(0) + ' per m²';
+                case 'cost':
+                    return '€' + value.toLocaleString();
+                case 'area':
+                    return value + ' m²';
+                case 'charges':
+                    return value > 0 ? '€' + value.toLocaleString() + ' charges' : 'No charges (€0)';
+                case 'energyClass':
+                    const energyClass = property['Energy Class'] || 'NC';
+                    return 'Energy Class: ' + energyClass;
+                default:
+                    return '€' + value.toFixed(0) + ' per m²';
+            }
+        }
+        
+        function createMarkers(type = 'costPerSqm') {
+            // Clear existing markers
+            markerGroup.clearLayers();
+            propertyMarkers = [];
+            
+            // Filter properties based on type - for charges and cost with outliers, only show properties within filtered range
+            let propertiesToShow = mappableProperties;
+            if (type === 'charges') {
+                propertiesToShow = mappableProperties.filter(p => hasValidDataForType(p, type));
+            }
+            
+            propertiesToShow.forEach((property, index) => {
+                const color = getMarkerColor(property, type);
+                
+                // Skip properties that should not be displayed (getMarkerColor returns null)
+                if (color === null) {
+                    return;
+                }
+                
+                const marker = L.circleMarker([property.lat, property.lng], {
+                    radius: 8,
+                    fillColor: color,
+                    color,
+                    weight: 1,
+                    opacity: 0.9,
+                    fillOpacity: 0.7
+                });
+                
+                const displayText = getDisplayText(property, type);
+                const charges = parseFloat(property.Charges || 0);
+                const energyClass = property['Energy Class'] || 'NC';
+                
+                const popupContent = 
+                    '<div class="popup-content">' +
+                        '<div class="popup-price">' + displayText + '</div>' +
+                        '<div class="popup-location">' + property.Location.split(',')[0] + '</div>' +
+                        '<div class="popup-details">' +
+                            '<strong>Price:</strong> €' + property.priceFrom.toLocaleString() + '<br>' +
+                            '<strong>Area:</strong> ' + property.areaFrom + ' m²<br>' +
+                            '<strong>Cost/m²:</strong> €' + property.costPerSqM.toFixed(0) + '<br>' +
+                            (charges > 0 ? '<strong>Charges:</strong> €' + charges.toLocaleString() + '<br>' : '') +
+                            (energyClass !== 'NC' ? '<strong>Energy Class:</strong> ' + energyClass + '<br>' : '') +
+                            '<strong>Location:</strong> ' + property.Location +
+                            (property.URL ? '<br><strong>Listing:</strong> <a href="' + property.URL + '" target="_blank" rel="noopener">View Original</a>' : '') +
+                        '</div>' +
+                        (property.geocoded_address ? '<div class="popup-address">Geocoded: ' + property.geocoded_address + '</div>' : '') +
+                    '</div>';
+                
+                marker.bindPopup(popupContent);
+                markerGroup.addLayer(marker);
+                
+                // Store marker for individual access (only for top 8 properties shown in list)
+                if (index < 8) {
+                    propertyMarkers[index] = marker;
+                }
+            });
+        }
+        
+        // Create initial markers
+        createMarkers(currentHeatmapType);
         
         markerGroup.addTo(map);
         
@@ -1559,6 +1925,219 @@ function generateHeatMap(properties) {
             }
         }
         
+        
+        // Function to update legend based on heatmap type
+        function updateLegend(type) {
+            // Calculate the range for this specific type
+            let mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
+            
+            // For charges, only include properties with valid charge data
+            if (type === 'charges') {
+                mappableProperties = mappableProperties.filter(p => hasValidDataForType(p, type));
+            }
+            
+            let validValues = mappableProperties
+                .filter(p => hasValidDataForType(p, type))
+                .map(p => getValueForType(p, type));
+            
+            let range;
+            if (validValues.length === 0) {
+                range = { min: 0, max: 1 };
+            } else {
+                // Apply outlier filtering for charges and cost (same as in createHeatData)
+                if ((type === 'charges' || type === 'cost') && validValues.length > 10) {
+                    validValues.sort((a, b) => a - b);
+                    const count = validValues.length;
+                    const outlierThreshold = 0.04;
+                    
+                    const lowIndex = Math.floor(count * outlierThreshold);
+                    const highIndex = Math.floor(count * (1 - outlierThreshold));
+                    
+                    range = {
+                        min: validValues[lowIndex],
+                        max: validValues[highIndex]
+                    };
+                } else {
+                    range = {
+                        min: Math.min(...validValues),
+                        max: Math.max(...validValues)
+                    };
+                }
+            }
+            
+            const legendTitle = document.getElementById('legendTitle');
+            const legendItems = document.getElementById('legendItems');
+            
+            // Update title and icon
+            const titles = {
+                costPerSqm: '💰 Cost per m²',
+                cost: '💵 Total Cost',
+                area: '📏 Area',
+                charges: '🏠 Monthly Charges',
+                energyClass: '🌱 Energy Class'
+            };
+            
+            legendTitle.textContent = titles[type] || '💰 Cost per m²';
+            
+            // Clear existing items
+            legendItems.innerHTML = '';
+            
+            // Add gray item for no data (except for charges where we hide properties without data)
+            if (type !== 'charges') {
+                const noDataItem = document.createElement('div');
+                noDataItem.className = 'legend-item';
+                noDataItem.innerHTML = 
+                    '<div class="legend-color" style="background: #cccccc;"></div>' +
+                    '<span>No data</span>';
+                legendItems.appendChild(noDataItem);
+            }
+            
+            // Create new legend items
+            const colors = ['#ffffcc', '#ffeda0', '#fed976', '#feb24c', '#fd8d3c'];
+            const gradients = [
+                'linear-gradient(90deg, #ffffcc, #ffeda0)',
+                'linear-gradient(90deg, #ffeda0, #fed976)',
+                'linear-gradient(90deg, #fed976, #feb24c)',
+                'linear-gradient(90deg, #feb24c, #fd8d3c)',
+                'linear-gradient(90deg, #fd8d3c, #fc4e2a)'
+            ];
+            
+            for (let i = 0; i < 5; i++) {
+                const min = range.min + (range.max - range.min) * (i / 5);
+                const max = range.min + (range.max - range.min) * ((i + 1) / 5);
+                
+                const legendItem = document.createElement('div');
+                legendItem.className = 'legend-item';
+                
+                let text = '';
+                switch(type) {
+                    case 'costPerSqm':
+                        text = '€' + Math.round(min).toLocaleString() + ' - €' + Math.round(max).toLocaleString();
+                        break;
+                    case 'cost':
+                        if (max > 1000000) {
+                            // For values over 1 million, show as M (millions)
+                            const minM = (min/1000000).toFixed(1);
+                            const maxM = (max/1000000).toFixed(1);
+                            text = '€' + minM + 'M - €' + maxM + 'M';
+                        } else if (max > 10000) {
+                            // For values over 10k, show as k but with proper decimal precision
+                            const minK = Math.round(min/1000);
+                            const maxK = Math.round(max/1000);
+                            text = '€' + minK + 'k - €' + maxK + 'k';
+                        } else {
+                            text = '€' + Math.round(min).toLocaleString() + ' - €' + Math.round(max).toLocaleString();
+                        }
+                        break;
+                    case 'area':
+                        text = Math.round(min) + ' - ' + Math.round(max) + ' m²';
+                        break;
+                    case 'charges':
+                        text = '€' + Math.round(min) + ' - €' + Math.round(max);
+                        break;
+                    case 'energyClass':
+                        const classes = ['', 'A', 'B', 'C', 'D', 'E', 'F', 'G'];
+                        const minClass = Math.max(1, Math.round(min));
+                        const maxClass = Math.min(7, Math.round(max));
+                        text = minClass === maxClass ? classes[minClass] : classes[minClass] + ' - ' + classes[maxClass];
+                        break;
+                    default:
+                        text = Math.round(min) + ' - ' + Math.round(max);
+                }
+                
+                legendItem.innerHTML = 
+                    '<div class="legend-color" style="background: ' + gradients[i] + ';"></div>' +
+                    '<span>' + text + '</span>';
+                
+                legendItems.appendChild(legendItem);
+            }
+        }        // Initialize legend
+        updateLegend(currentHeatmapType);
+        // Function to change heatmap type
+        function changeHeatmapType(newType) {
+            // Show spinner immediately
+            const typeNames = {
+                costPerSqm: 'Cost per m²',
+                cost: 'Total Cost',
+                area: 'Area',
+                charges: 'Monthly Charges',
+                energyClass: 'Energy Class'
+            };
+            
+            const typeName = typeNames[newType] || 'Visualization';
+            showSpinner('Switching to ' + typeName + '...', 'Recalculating heat map data and updating markers');
+            
+            // Use setTimeout to allow the spinner to render before starting the heavy computation
+            setTimeout(() => {
+                try {
+                    currentHeatmapType = newType;
+                    
+                    console.log('Switching to ' + newType + ' heatmap');
+                    
+                    // Show current range for debugging
+                    const mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
+                    const validValues = mappableProperties
+                        .filter(p => hasValidDataForType(p, newType))
+                        .map(p => getValueForType(p, newType));
+                    
+                    if (validValues.length > 0) {
+                        const minVal = Math.min(...validValues);
+                        const maxVal = Math.max(...validValues);
+                        console.log(newType + ' range: ' + minVal + ' to ' + maxVal);
+                        
+                        // Show some examples
+                        const sampleProperty = mappableProperties.find(p => hasValidDataForType(p, newType));
+                        if (sampleProperty) {
+                            const value = getValueForType(sampleProperty, newType);
+                            const position = maxVal > minVal ? (value - minVal) / (maxVal - minVal) : 0.5;
+                            console.log('Sample property: ' + sampleProperty.Location.substring(0, 30) + '... has ' + newType + ' = ' + value + ', position = ' + position.toFixed(3));
+                        }
+                    }
+                    
+                    // Update legend
+                    updateLegend(newType);
+                    
+                    // Update heat layer
+                    map.removeLayer(heatLayer);
+                    heatData = createHeatData(newType);
+                    heatLayer = L.heatLayer(heatData, {
+                        radius: parseInt(document.getElementById('heatRadius').value),
+                        blur: 15,
+                        maxZoom: 17,
+                        max: 1.0,
+                        gradient: {
+                            0.0: 'rgba(255,255,204,0.6)',   // Light yellow (low values)
+                            0.2: 'rgba(255,237,160,0.7)',    // Yellow
+                            0.4: 'rgba(254,217,118,0.7)',    // Orange-yellow  
+                            0.6: 'rgba(254,178,76,0.8)',     // Orange
+                            0.8: 'rgba(253,141,60,0.8)',     // Red-orange
+                            1.0: 'rgba(227,26,28,1.0)'       // Deep red (high values)
+                        }
+                    });
+                    
+                    if (document.getElementById('showHeat').checked) {
+                        map.addLayer(heatLayer);
+                    }
+                    
+                    // Update markers
+                    createMarkers(newType);
+                    if (document.getElementById('showMarkers').checked) {
+                        map.addLayer(markerGroup);
+                    }
+                    
+                    console.log('Switched to ' + newType + ' heatmap');
+                    
+                } catch (error) {
+                    console.error('Error changing heatmap type:', error);
+                } finally {
+                    // Hide spinner after a short delay to ensure UI updates are complete
+                    setTimeout(() => {
+                        hideSpinner();
+                    }, 100);
+                }
+            }, 50); // Small delay to ensure spinner renders
+        }
+        
         // Control functions
         function toggleHeatLayer() {
             const checkbox = document.getElementById('showHeat');
@@ -1579,24 +2158,36 @@ function generateHeatMap(properties) {
         }
         
         function updateHeatRadius(radius) {
-            map.removeLayer(heatLayer);
-            heatLayer = L.heatLayer(heatData, {
-                radius: parseInt(radius),
-                blur: 15,
-                maxZoom: 17,
-                max: 1.0,
-                gradient: {
-                    0.0: 'rgba(255,255,204,0.6)',   // Light yellow (low cost)
-                    0.2: 'rgba(255,237,160,0.7)',    // Yellow
-                    0.4: 'rgba(254,217,118,0.7)',    // Orange-yellow  
-                    0.6: 'rgba(254,178,76,0.8)',     // Orange
-                    0.8: 'rgba(253,141,60,0.8)',     // Red-orange
-                    1.0: 'rgba(227,26,28,1.0)'       // Deep red (high cost)
+            showSpinner('Updating Heat Radius...', 'Recalculating heat layer with new radius: ' + radius + 'px');
+            
+            setTimeout(() => {
+                try {
+                    map.removeLayer(heatLayer);
+                    heatLayer = L.heatLayer(heatData, {
+                        radius: parseInt(radius),
+                        blur: 15,
+                        maxZoom: 17,
+                        max: 1.0,
+                        gradient: {
+                            0.0: 'rgba(255,255,204,0.6)',   // Light yellow (low values)
+                            0.2: 'rgba(255,237,160,0.7)',    // Yellow
+                            0.4: 'rgba(254,217,118,0.7)',    // Orange-yellow  
+                            0.6: 'rgba(254,178,76,0.8)',     // Orange
+                            0.8: 'rgba(253,141,60,0.8)',     // Red-orange
+                            1.0: 'rgba(227,26,28,1.0)'       // Deep red (high values)
+                        }
+                    });
+                    if (document.getElementById('showHeat').checked) {
+                        map.addLayer(heatLayer);
+                    }
+                } catch (error) {
+                    console.error('Error updating heat radius:', error);
+                } finally {
+                    setTimeout(() => {
+                        hideSpinner();
+                    }, 100);
                 }
-            });
-            if (document.getElementById('showHeat').checked) {
-                map.addLayer(heatLayer);
-            }
+            }, 50);
         }
         
         function togglePropertyList() {
