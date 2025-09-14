@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
-// const type = 'for-sale';
-const type = 'for-rent';
+const type = 'for-sale';
+// const type = 'for-rent';
 const outlierThreshold = 0.04;
 
 const isUsingOnlyCachedGeocodes = true;
@@ -1040,6 +1040,19 @@ function generateHeatMap(properties) {
 	const maxCost = Math.max(...costs);
 	const avgCost = costs.reduce((sum, cost) => sum + cost, 0) / costs.length;
 
+	// Calculate the EXACT same server-side range that was used for filtering
+	const count = sortedCosts.length;
+	const p4Index = Math.floor(count * outlierThreshold);
+	const p96Index = Math.floor(count * (1 - outlierThreshold));
+	const serverMinCost = sortedCosts[p4Index];
+	const serverMaxCost = sortedCosts[p96Index];
+
+	console.log(
+		`Embedding server ranges in HTML: ${serverMinCost.toFixed(
+			2
+		)} - ${serverMaxCost.toFixed(2)}`
+	);
+
 	// Calculate statistics for other metrics
 	const prices = properties
 		.map((p) => p.priceFrom)
@@ -1096,14 +1109,33 @@ function generateHeatMap(properties) {
             position: absolute;
             top: 20px;
             left: 20px;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            background: rgba(255, 255, 255, 0.96);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.15), 0 4px 12px rgba(0,0,0,0.1);
             z-index: 1000;
-            max-width: 350px;
-            border: 1px solid rgba(255,255,255,0.2);
+            max-width: 380px;
+            border: 1px solid rgba(255,255,255,0.3);
+            animation: slideInLeft 0.5s ease-out;
+            transition: all 0.3s ease;
+        }
+        
+        .info-panel:hover {
+            box-shadow: 0 16px 48px rgba(0,0,0,0.2), 0 6px 16px rgba(0,0,0,0.15);
+            transform: translateY(-2px);
+        }
+        
+        @keyframes slideInLeft {
+            from {
+                opacity: 0;
+                transform: translateX(-100px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
         }
         
         .info-panel h3 {
@@ -1145,14 +1177,33 @@ function generateHeatMap(properties) {
             position: absolute;
             bottom: 30px;
             right: 30px;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            background: rgba(255, 255, 255, 0.96);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.15), 0 4px 12px rgba(0,0,0,0.1);
             z-index: 1000;
-            border: 1px solid rgba(255,255,255,0.2);
-            min-width: 200px;
+            border: 1px solid rgba(255,255,255,0.3);
+            min-width: 220px;
+            animation: slideInUp 0.6s ease-out;
+            transition: all 0.3s ease;
+        }
+        
+        .legend:hover {
+            box-shadow: 0 16px 48px rgba(0,0,0,0.2), 0 6px 16px rgba(0,0,0,0.15);
+            transform: translateY(-2px);
+        }
+        
+        @keyframes slideInUp {
+            from {
+                opacity: 0;
+                transform: translateY(50px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
         
         .legend h4 {
@@ -1181,38 +1232,101 @@ function generateHeatMap(properties) {
             position: absolute;
             top: 20px;
             right: 20px;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            background: rgba(255, 255, 255, 0.96);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            padding: 24px;
+            border-radius: 16px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.15), 0 4px 12px rgba(0,0,0,0.1);
             z-index: 1000;
-            border: 1px solid rgba(255,255,255,0.2);
-            min-width: 220px;
+            border: 1px solid rgba(255,255,255,0.3);
+            min-width: 260px;
+            max-width: 300px;
+            animation: slideInRight 0.5s ease-out;
+            transition: all 0.3s ease;
+        }
+        
+        .controls:hover {
+            box-shadow: 0 16px 48px rgba(0,0,0,0.2), 0 6px 16px rgba(0,0,0,0.15);
+            transform: translateY(-2px);
+        }
+        
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(100px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
         }
         
         .control-item {
-            margin: 8px 0;
+            margin: 16px 0;
             display: flex;
             align-items: center;
             font-size: 14px;
+            gap: 12px;
         }
         
-        .control-item input {
-            margin-right: 8px;
+        .control-item:first-child {
+            margin-top: 0;
+        }
+        
+        .control-item:last-child {
+            margin-bottom: 0;
+        }
+        
+        .control-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            margin: 0;
+            cursor: pointer;
+            accent-color: #3498db;
+            transform: scale(1.1);
+        }
+        
+        .control-item label {
+            cursor: pointer;
+            font-weight: 500;
+            color: #2c3e50;
+            user-select: none;
+            transition: color 0.2s ease;
+        }
+        
+        .control-item label:hover {
+            color: #3498db;
         }
         
         .control-item select {
-            margin-right: 8px;
-            padding: 8px 12px;
-            border: 2px solid #3498db;
-            border-radius: 6px;
+            padding: 12px 16px;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
             background: white;
             font-size: 14px;
             font-weight: 500;
             flex: 1;
             color: #2c3e50;
             transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            appearance: none;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 16px;
+            padding-right: 40px;
+        }
+        
+        .control-item select:hover {
+            border-color: #3498db;
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.15);
+        }
+        
+        .control-item select:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1), 0 4px 12px rgba(52, 152, 219, 0.15);
         }
         
         .control-item select:disabled {
@@ -1220,6 +1334,66 @@ function generateHeatMap(properties) {
             color: #6c757d;
             cursor: not-allowed;
             opacity: 0.7;
+            border-color: #dee2e6;
+            box-shadow: none;
+        }
+        
+        .control-item input[type="range"] {
+            flex: 1;
+            height: 6px;
+            border-radius: 3px;
+            background: linear-gradient(to right, #e9ecef 0%, #e9ecef 100%);
+            outline: none;
+            -webkit-appearance: none;
+            appearance: none;
+            cursor: pointer;
+        }
+        
+        .control-item input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #3498db;
+            cursor: pointer;
+            border: 3px solid white;
+            box-shadow: 0 2px 8px rgba(52, 152, 219, 0.3), 0 1px 4px rgba(0,0,0,0.1);
+            transition: all 0.2s ease;
+        }
+        
+        .control-item input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.4), 0 2px 6px rgba(0,0,0,0.15);
+        }
+        
+        .control-item input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #3498db;
+            cursor: pointer;
+            border: 3px solid white;
+            box-shadow: 0 2px 8px rgba(52, 152, 219, 0.3), 0 1px 4px rgba(0,0,0,0.1);
+            transition: all 0.2s ease;
+        }
+        
+        .control-item input[type="range"]::-moz-range-thumb:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.4), 0 2px 6px rgba(0,0,0,0.15);
+        }
+        
+        .control-item input[type="range"]::-webkit-slider-track {
+            height: 6px;
+            border-radius: 3px;
+            background: linear-gradient(to right, #3498db 0%, #e9ecef 0%);
+            transition: background 0.2s ease;
+        }
+        
+        .control-item input[type="range"]::-moz-range-track {
+            height: 6px;
+            border-radius: 3px;
+            background: #e9ecef;
         }
         
         .control-item input[type="range"]:disabled {
@@ -1230,21 +1404,25 @@ function generateHeatMap(properties) {
         .control-item input[type="range"]:disabled::-webkit-slider-thumb {
             background: #adb5bd;
             cursor: not-allowed;
+            transform: none;
         }
         
         .control-item input[type="range"]:disabled::-moz-range-thumb {
             background: #adb5bd;
             cursor: not-allowed;
+            transform: none;
         }
         
         .control-label {
             font-weight: 600;
             color: #2c3e50;
-            margin-bottom: 8px;
-            font-size: 14px;
+            margin-bottom: 12px;
+            font-size: 13px;
             display: block;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.8px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 8px;
         }
         
         .leaflet-popup-content {
@@ -1484,26 +1662,31 @@ function generateHeatMap(properties) {
 
     <div class="controls">
         <div class="control-item">
-            <label class="control-label">🎯 Coloring By:</label>
+            <label class="control-label">🎯 Coloring By</label>
             <select id="heatmapType" onchange="changeHeatmapType(this.value)">
-                <option value="costPerSqm" selected>Cost per m²</option>
-                <option value="cost">Total Cost</option>
-                <option value="area">Area</option>
-                <option value="charges">Charges</option>
-                <option value="energyClass">Energy Class</option>
+                <option value="costPerSqm" selected>💰 Cost per m²</option>
+                <option value="cost">💵 ${
+									type == 'for-rent' ? 'Monthly Rent' : 'Total Cost'
+								}</option>
+                <option value="area">📏 Area</option>
+                <option value="charges">🏠 Charges</option>
+                <option value="energyClass">🌱 Energy Class</option>
             </select>
         </div>
+        
         <div class="control-item">
             <input type="checkbox" id="showHeat" checked onchange="toggleHeatLayer()">
-            <label for="showHeat">Heat Layer</label>
+            <label for="showHeat">🔥 Heat Layer</label>
         </div>
+        
         <div class="control-item">
             <input type="checkbox" id="showMarkers" checked onchange="toggleMarkers()">
-            <label for="showMarkers">Property Markers</label>
+            <label for="showMarkers">📍 Property Markers</label>
         </div>
+        
         <div class="control-item">
+            <label for="heatRadius" style="margin-bottom: 8px; display: block; font-size: 12px; color: #6c757d; font-weight: normal; text-transform: none; letter-spacing: normal; border: none; padding: 0;">🌊 Heat Radius</label>
             <input type="range" id="heatRadius" min="10" max="50" value="25" onchange="updateHeatRadius(this.value)">
-            <label for="heatRadius">Heat Radius</label>
         </div>
     </div>
 
@@ -1536,6 +1719,17 @@ function generateHeatMap(properties) {
         
         // Property data with real geocoded coordinates
         const properties = ${JSON.stringify(properties)};
+        
+        // SERVER-CALCULATED RANGES - Use these exact values, don't recalculate!
+        const serverRanges = {
+            costPerSqm: { min: ${serverMinCost}, max: ${serverMaxCost} },
+            cost: { min: 0, max: 0 }, // Will be calculated dynamically
+            area: { min: 0, max: 0 }, // Will be calculated dynamically  
+            charges: { min: 0, max: 0 }, // Will be calculated dynamically
+            energyClass: { min: 1, max: 7 }
+        };
+        
+        console.log('SERVER RANGES - Cost per m²:', serverRanges.costPerSqm.min.toFixed(2), '-', serverRanges.costPerSqm.max.toFixed(2));
         
         // Store current heatmap type
         let currentHeatmapType = 'costPerSqm';
@@ -1640,6 +1834,8 @@ function generateHeatMap(properties) {
         
         // Function to create heat data for a specific type
         function createHeatData(type) {
+            console.log('createHeatData called for type:', type);
+            
             let mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
             
             // For charges, only include properties with valid charge data
@@ -1647,48 +1843,59 @@ function generateHeatMap(properties) {
                 mappableProperties = mappableProperties.filter(p => hasValidDataForType(p, type));
             }
             
-            // Get all valid values for this type to calculate proper ranges
-            let validValues = mappableProperties
-                .filter(p => hasValidDataForType(p, type))
-                .map(p => getValueForType(p, type));
-            
-            if (validValues.length === 0) {
-                console.log('No valid values found for type: ' + type);
-                return [];
-            }
-            
-            // Apply outlier filtering for charges and cost (similar to cost per sqm filtering)
             let minVal, maxVal;
-            if ((type === 'charges' || type === 'cost') && validValues.length > 10) {
-                // Sort and remove outliers (top/bottom 4% like cost per sqm)
-                validValues.sort((a, b) => a - b);
-                const count = validValues.length;
-                const outlierThreshold = 0.04; // Same as used for cost per sqm
-                
-                const lowIndex = Math.floor(count * outlierThreshold);
-                const highIndex = Math.floor(count * (1 - outlierThreshold));
-                
-                minVal = validValues[lowIndex];
-                maxVal = validValues[highIndex];
-                
-                console.log(type + ' outlier filtering: original range €' + validValues[0] + ' - €' + validValues[count-1] + ', filtered range €' + minVal + ' - €' + maxVal);
+            
+            // For costPerSqm, use the exact server-calculated range
+            if (type === 'costPerSqm') {
+                minVal = serverRanges.costPerSqm.min;
+                maxVal = serverRanges.costPerSqm.max;
+                console.log('Using server range for heat data:', minVal.toFixed(2), '-', maxVal.toFixed(2));
             } else {
-                minVal = Math.min(...validValues);
-                maxVal = Math.max(...validValues);
+                // For other types, calculate range dynamically
+                let validValues = mappableProperties
+                    .filter(p => hasValidDataForType(p, type))
+                    .map(p => getValueForType(p, type));
+                
+                if (validValues.length === 0) {
+                    console.log('No valid values found for type: ' + type);
+                    return [];
+                }
+                
+                // Apply outlier filtering for charges and cost
+                if ((type === 'charges' || type === 'cost') && validValues.length > 10) {
+                    validValues.sort((a, b) => a - b);
+                    const count = validValues.length;
+                    const outlierThreshold = 0.04; // Same as server-side filtering
+                    
+                    const lowIndex = Math.floor(count * outlierThreshold);
+                    const highIndex = Math.floor(count * (1 - outlierThreshold));
+                    
+                    minVal = validValues[lowIndex];
+                    maxVal = validValues[highIndex];
+                    
+                    console.log(type + ' outlier filtering: original range ' + validValues[0].toFixed(2) + ' - ' + validValues[count-1].toFixed(2) + ', filtered range ' + minVal.toFixed(2) + ' - ' + maxVal.toFixed(2));
+                } else {
+                    minVal = Math.min(...validValues);
+                    maxVal = Math.max(...validValues);
+                }
             }
             
-            console.log('Heat data for ' + type + ': min=' + minVal + ', max=' + maxVal + ', count=' + validValues.length);
+            console.log('Heat data for ' + type + ': min=' + minVal.toFixed(2) + ', max=' + maxVal.toFixed(2));
             
             return mappableProperties.map(property => {
                 const value = getValueForType(property, type);
                 let intensity;
                 
                 if (hasValidDataForType(property, type)) {
-                    // For charges and cost with outlier filtering, exclude properties outside the filtered range
-                    if ((type === 'charges' || type === 'cost') && validValues.length > 10 && (value < minVal || value > maxVal)) {
-                        // Skip properties outside the outlier-filtered range
-                        return null;
-                    } else if (maxVal > minVal) {
+                    // For all filtered types, exclude properties outside the filtered range
+                    if (((type === 'charges' || type === 'cost') && mappableProperties.length > 10) || type === 'costPerSqm') {
+                        if (value < minVal || value > maxVal) {
+                            // Skip properties outside the filtered range
+                            return null;
+                        }
+                    }
+                    
+                    if (maxVal > minVal) {
                         // Normal intensity calculation for properties with data
                         intensity = Math.max(0.1, Math.min(1.0, (value - minVal) / (maxVal - minVal)));
                     } else {
@@ -1740,50 +1947,66 @@ function generateHeatMap(properties) {
                 return '#cccccc'; // Gray for properties without data (other types)
             }
             
-            // Calculate range dynamically for this type
-            let mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
-            
-            // For charges, only include properties with valid charge data
-            if (type === 'charges') {
-                mappableProperties = mappableProperties.filter(p => hasValidDataForType(p, type));
-            }
-            
-            let validValues = mappableProperties
-                .filter(p => hasValidDataForType(p, type))
-                .map(p => getValueForType(p, type));
-            
-            if (validValues.length === 0) {
-                return '#cccccc';
-            }
-            
             let minVal, maxVal;
-            // Apply outlier filtering for charges and cost (same as in createHeatData)
-            if ((type === 'charges' || type === 'cost') && validValues.length > 10) {
-                validValues.sort((a, b) => a - b);
-                const count = validValues.length;
-                const outlierThreshold = 0.04;
-                
-                const lowIndex = Math.floor(count * outlierThreshold);
-                const highIndex = Math.floor(count * (1 - outlierThreshold));
-                
-                minVal = validValues[lowIndex];
-                maxVal = validValues[highIndex];
+            
+            // For costPerSqm, use the exact server-calculated range
+            if (type === 'costPerSqm') {
+                minVal = serverRanges.costPerSqm.min;
+                maxVal = serverRanges.costPerSqm.max;
                 
                 const value = getValueForType(property, type);
                 
-                // If property is outside filtered range, don't show it
+                // If property is outside server-filtered range, don't show it
                 if (value < minVal || value > maxVal) {
                     return null; // Don't render this marker
                 }
             } else {
-                minVal = Math.min(...validValues);
-                maxVal = Math.max(...validValues);
+                // For other types, calculate range dynamically with outlier filtering
+                let mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
+                
+                // For charges, only include properties with valid charge data
+                if (type === 'charges') {
+                    mappableProperties = mappableProperties.filter(p => hasValidDataForType(p, type));
+                }
+                
+                let validValues = mappableProperties
+                    .filter(p => hasValidDataForType(p, type))
+                    .map(p => getValueForType(p, type));
+                
+                if (validValues.length === 0) {
+                    return '#cccccc';
+                }
+                
+                // Apply outlier filtering for charges and cost
+                if ((type === 'charges' || type === 'cost') && validValues.length > 10) {
+                    validValues.sort((a, b) => a - b);
+                    const count = validValues.length;
+                    const outlierThreshold = 0.04; // Same as server-side filtering
+                    
+                    const lowIndex = Math.floor(count * outlierThreshold);
+                    const highIndex = Math.floor(count * (1 - outlierThreshold));
+                    
+                    minVal = validValues[lowIndex];
+                    maxVal = validValues[highIndex];
+                    
+                    const value = getValueForType(property, type);
+                    
+                    // If property is outside filtered range, don't show it
+                    if (value < minVal || value > maxVal) {
+                        return null; // Don't render this marker
+                    }
+                } else {
+                    minVal = Math.min(...validValues);
+                    maxVal = Math.max(...validValues);
+                }
             }
             
             const value = getValueForType(property, type);
             
             // Simple linear scaling based on actual value range
             const position = maxVal > minVal ? (value - minVal) / (maxVal - minVal) : 0.5;
+            
+            console.log('Color for', type, 'value', value.toFixed(2), 'position', position.toFixed(3), 'range', minVal.toFixed(2) + '-' + maxVal.toFixed(2));
             
             if (position < 0.2) return '#ffffcc'; // Light yellow
             if (position < 0.4) return '#ffeda0'; // Yellow
@@ -1928,42 +2151,53 @@ function generateHeatMap(properties) {
         
         // Function to update legend based on heatmap type
         function updateLegend(type) {
-            // Calculate the range for this specific type
-            let mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
-            
-            // For charges, only include properties with valid charge data
-            if (type === 'charges') {
-                mappableProperties = mappableProperties.filter(p => hasValidDataForType(p, type));
-            }
-            
-            let validValues = mappableProperties
-                .filter(p => hasValidDataForType(p, type))
-                .map(p => getValueForType(p, type));
+            console.log('updateLegend called for type:', type);
             
             let range;
-            if (validValues.length === 0) {
-                range = { min: 0, max: 1 };
+            
+            // For costPerSqm, use the exact server-calculated range
+            if (type === 'costPerSqm') {
+                range = serverRanges.costPerSqm;
+                console.log('Using server range for costPerSqm:', range.min.toFixed(2), '-', range.max.toFixed(2));
             } else {
-                // Apply outlier filtering for charges and cost (same as in createHeatData)
-                if ((type === 'charges' || type === 'cost') && validValues.length > 10) {
-                    validValues.sort((a, b) => a - b);
-                    const count = validValues.length;
-                    const outlierThreshold = 0.04;
-                    
-                    const lowIndex = Math.floor(count * outlierThreshold);
-                    const highIndex = Math.floor(count * (1 - outlierThreshold));
-                    
-                    range = {
-                        min: validValues[lowIndex],
-                        max: validValues[highIndex]
-                    };
+                // For other types, calculate dynamically with outlier filtering
+                let mappableProperties = properties.filter(p => p.lat != null && p.lng != null);
+                
+                // For charges, only include properties with valid charge data
+                if (type === 'charges') {
+                    mappableProperties = mappableProperties.filter(p => hasValidDataForType(p, type));
+                }
+                
+                let validValues = mappableProperties
+                    .filter(p => hasValidDataForType(p, type))
+                    .map(p => getValueForType(p, type));
+                
+                if (validValues.length === 0) {
+                    range = { min: 0, max: 1 };
                 } else {
-                    range = {
-                        min: Math.min(...validValues),
-                        max: Math.max(...validValues)
-                    };
+                    // Apply outlier filtering for charges and cost
+                    if ((type === 'charges' || type === 'cost') && validValues.length > 10) {
+                        validValues.sort((a, b) => a - b);
+                        const count = validValues.length;
+                        const outlierThreshold = 0.04; // Same as server-side filtering
+                        
+                        const lowIndex = Math.floor(count * outlierThreshold);
+                        const highIndex = Math.floor(count * (1 - outlierThreshold));
+                        
+                        range = {
+                            min: validValues[lowIndex],
+                            max: validValues[highIndex]
+                        };
+                    } else {
+                        range = {
+                            min: Math.min(...validValues),
+                            max: Math.max(...validValues)
+                        };
+                    }
                 }
             }
+            
+            console.log('Legend range for ' + type + ': min=' + range.min.toFixed(2) + ', max=' + range.max.toFixed(2));
             
             const legendTitle = document.getElementById('legendTitle');
             const legendItems = document.getElementById('legendItems');
@@ -1971,7 +2205,9 @@ function generateHeatMap(properties) {
             // Update title and icon
             const titles = {
                 costPerSqm: '💰 Cost per m²',
-                cost: '💵 Total Cost',
+                cost: '💵 ${
+									type == 'for-rent' ? 'Monthly Rent' : 'Total Cost'
+								}',
                 area: '📏 Area',
                 charges: '🏠 Monthly Charges',
                 energyClass: '🌱 Energy Class'
@@ -2058,7 +2294,7 @@ function generateHeatMap(properties) {
             // Show spinner immediately
             const typeNames = {
                 costPerSqm: 'Cost per m²',
-                cost: 'Total Cost',
+                cost: '${type == 'for-rent' ? 'Monthly Rent' : 'Total Cost'}',
                 area: 'Area',
                 charges: 'Monthly Charges',
                 energyClass: 'Energy Class'
