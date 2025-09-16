@@ -3,8 +3,18 @@ const fs = require('fs');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 // const createCsvStringifier = require('csv-writer').createObjectCsvStringifier;
 
-const type = 'for-rent';
-// const type = 'for-sale';
+// Parse command line arguments
+const args = process.argv.slice(2);
+if (args.length === 0 || !['rent', 'sale'].includes(args[0])) {
+	console.log('Usage: node main.cjs [rent|sale]');
+	console.log('  rent - scrape rental properties');
+	console.log('  sale - scrape sale properties');
+	process.exit(1);
+}
+
+const type = args[0] === 'rent' ? 'for-rent' : 'for-sale';
+console.log(`Starting scraper for ${type} properties...`);
+
 const maxArea = 1200;
 const areaStep = 20;
 const outFileName = `athome-${type}.csv`;

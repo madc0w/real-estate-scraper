@@ -1,8 +1,18 @@
 const fs = require('fs');
 const path = require('path');
 
-const type = 'for-sale';
-// const type = 'for-rent';
+// Parse command line arguments
+const args = process.argv.slice(2);
+if (args.length === 0 || !['rent', 'sale'].includes(args[0])) {
+	console.log('Usage: node costMap.cjs [rent|sale]');
+	console.log('  rent - analyze rental properties');
+	console.log('  sale - analyze sale properties');
+	process.exit(1);
+}
+
+const type = args[0] === 'rent' ? 'for-rent' : 'for-sale';
+console.log(`Analyzing ${type} properties...`);
+
 const outlierThreshold = 0.04;
 
 const isUsingOnlyCachedGeocodes = true;
