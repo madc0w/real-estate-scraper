@@ -425,19 +425,13 @@ async function scrapeAtHomeLu() {
 										data.energyClass = appDataOld.energyClass;
 									}
 
-									// Type from useType - may be in GTM data layer or other global variables
-									try {
-										const gtmDataLayer = window.dataLayer;
-										if (gtmDataLayer && Array.isArray(gtmDataLayer)) {
-											for (let gtmData of gtmDataLayer) {
-												if (gtmData.useType) {
-													data.type = gtmData.useType;
-													break;
-												}
-											}
-										}
-									} catch (e) {
-										// Ignore errors accessing dataLayer
+									// Extract property type from URL
+									// URL format: https://www.athome.lu/fr/[vente|location]/[type]/mons/id-8779150.html
+									const urlMatch = url.match(
+										/\/(?:vente|location)\/([^\/]+)\//
+									);
+									if (urlMatch) {
+										data.type = urlMatch[1];
 									}
 
 									console.log(
@@ -730,19 +724,13 @@ async function scrapeAtHomeLu() {
 										// Ignore errors accessing global variables
 									}
 
-									// Try to extract type from GTM data layer
-									try {
-										const gtmDataLayer = window.dataLayer;
-										if (gtmDataLayer && Array.isArray(gtmDataLayer)) {
-											for (let gtmData of gtmDataLayer) {
-												if (gtmData.useType) {
-													data.type = gtmData.useType;
-													break;
-												}
-											}
-										}
-									} catch (e) {
-										// Ignore errors accessing dataLayer
+									// Extract type from URL in fallback mode
+									// URL format: https://www.athome.lu/fr/[vente|location]/[type]/mons/id-8779150.html
+									const urlMatch = url.match(
+										/\/(?:vente|location)\/([^\/]+)\//
+									);
+									if (urlMatch) {
+										data.type = urlMatch[1];
 									}
 
 									// Clean up the data
