@@ -150,11 +150,12 @@ async function scrapeAtHomeLu() {
 		for (let area = 0; area <= maxArea; area += areaStep) {
 			for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
 				const toArea = area + areaStep - 1;
+				// q=faee1a4a means Luxembourg only
 				const pageUrl = `https://www.athome.lu/${
 					type == 'for-sale' ? 'vente' : 'location'
 				}/?tr=${
 					type == 'for-sale' ? 'buy' : 'rent'
-				}&page=${pageNum}&srf_min=${area}&srf_max=${toArea}`;
+				}&q=faee1a4a&page=${pageNum}&srf_min=${area}&srf_max=${toArea}`;
 				console.log(
 					`${new Date().toISOString()} : Navigating to page ${pageNum} for area ${area} - ${toArea} m²: ${pageUrl}`
 				);
