@@ -22,6 +22,71 @@ const maxPages = 500;
 
 const ids = new Set();
 
+// Shared UA for all pages and any recreated pages
+const USER_AGENT =
+	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
+
+function delay(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isDetachableOrTransientError(err) {
+	const msg = (err && err.message ? err.message : String(err)).toLowerCase();
+	return (
+		msg.includes('detached frame') ||
+		msg.includes('target closed') ||
+		msg.includes('session closed') ||
+		msg.includes('page crashed') ||
+		msg.includes('execution context was destroyed') ||
+		msg.includes('browser has disconnected') ||
+		msg.includes('cannot find context') ||
+		msg.includes('timeout') // treat timeouts as transient
+	);
+}
+
+async function recreatePage(browser) {
+	const p = await browser.newPage();
+	await p.setUserAgent(USER_AGENT);
+	return p;
+}
+
+// Robust navigation that retries and recreates the page if needed.
+// Returns the (possibly new) page instance after successful navigation.
+async function safeGoto(page, url, options, browser, maxRetries = 3) {
+	let lastError;
+	for (let attempt = 1; attempt <= maxRetries; attempt++) {
+		try {
+			await page.goto(url, options);
+			return page;
+		} catch (err) {
+			lastError = err;
+			if (!isDetachableOrTransientError(err)) {
+				throw err;
+			}
+
+			// If frame/page got detached or target closed, recreate the page
+			const shouldRecreate =
+				/detached frame|target closed|session closed|page crashed|browser has disconnected|execution context was destroyed|cannot find context/i.test(
+					err?.message || ''
+				);
+
+			if (shouldRecreate) {
+				try {
+					await page.close({ runBeforeUnload: false });
+				} catch (_) {
+					// ignore
+				}
+				page = await recreatePage(browser);
+			}
+
+			// Backoff before retrying
+			await delay(500 * attempt);
+		}
+	}
+	// Exhausted retries
+	throw lastError;
+}
+
 async function readExistingUrls() {
 	console.log(`Reading existing URLs from ${outFileName}...`);
 
@@ -134,18 +199,14 @@ async function scrapeAtHomeLu() {
 	let totalPropertyCount = 0;
 
 	try {
-		const page = await browser.newPage();
+		let page = await browser.newPage();
 
 		// Create a second page for property details to avoid navigation conflicts
-		const propertyPage = await browser.newPage();
+		let propertyPage = await browser.newPage();
 
-		// Set user agent to avoid being blocked
-		await page.setUserAgent(
-			'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-		);
-		await propertyPage.setUserAgent(
-			'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-		);
+		// Set user agent to avoid being blocked (also used by recreated pages)
+		await page.setUserAgent(USER_AGENT);
+		await propertyPage.setUserAgent(USER_AGENT);
 
 		for (let area = 0; area <= maxArea; area += areaStep) {
 			for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
@@ -161,10 +222,15 @@ async function scrapeAtHomeLu() {
 				);
 
 				try {
-					await page.goto(pageUrl, {
-						waitUntil: 'networkidle2',
-						timeout: 30000,
-					});
+					page = await safeGoto(
+						page,
+						pageUrl,
+						{
+							waitUntil: 'networkidle2',
+							timeout: 30000,
+						},
+						browser
+					);
 
 					// Wait for the page to load completely
 					await new Promise((resolve) => setTimeout(resolve, 800));
@@ -218,10 +284,15 @@ async function scrapeAtHomeLu() {
 						);
 
 						try {
-							await propertyPage.goto(propertyLink, {
-								waitUntil: 'networkidle2',
-								timeout: 30000,
-							});
+							propertyPage = await safeGoto(
+								propertyPage,
+								propertyLink,
+								{
+									waitUntil: 'networkidle2',
+									timeout: 30000,
+								},
+								browser
+							);
 
 							// Wait for the page to load completely
 							await new Promise((resolve) => setTimeout(resolve, 800));
