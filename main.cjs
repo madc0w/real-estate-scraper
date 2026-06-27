@@ -15,7 +15,7 @@ process.on('unhandledRejection', (reason) => {
 // Parse command line arguments
 const args = process.argv.slice(2);
 const mode = args.find((arg) => ['rent', 'sale'].includes(arg));
-const fsboOnly = args.includes('--fsbo') || args.includes('fsbo');
+const isFsboOnly = args.includes('--fsbo') || args.includes('fsbo');
 
 if (!mode) {
 	console.log('Usage: node main.cjs [rent|sale] [--fsbo]');
@@ -27,12 +27,12 @@ if (!mode) {
 
 const type = mode === 'rent' ? 'for-rent' : 'for-sale';
 console.log(
-	`Starting scraper for ${type} properties${fsboOnly ? ' (FSBO only)' : ''}...`,
+	`Starting scraper for ${type} properties${isFsboOnly ? ' (FSBO only)' : ''}...`,
 );
 
 const maxArea = 1200;
 const areaStep = 20;
-const outFileName = `athome-${type}.csv`;
+const outFileName = `athome-${type}${isFsboOnly ? '-fsbo' : ''}.csv`;
 const maxPages = 500;
 
 const ids = new Set();
@@ -1002,12 +1002,12 @@ async function scrapeAtHomeLu() {
 								}
 							});
 
-							if (!fsboOnly || propertyInfo.fsbo) {
+							if (!isFsboOnly || propertyInfo.fsbo) {
 								// Write this property's data immediately to CSV
 								await csvWriter.writeRecords([propertyInfo]);
 								totalRecordsWritten++;
 
-								if (fsboOnly) {
+								if (isFsboOnly) {
 									console.log(
 										`${new Date().toISOString()} FSBO record found (${totalRecordsWritten} total records written)`,
 									);
@@ -1046,7 +1046,7 @@ async function scrapeAtHomeLu() {
 								energyClass: '',
 							};
 
-							if (!fsboOnly) {
+							if (!isFsboOnly) {
 								// Write error record immediately to CSV
 								await csvWriter.writeRecords([errorRecord]);
 								totalRecordsWritten++;
