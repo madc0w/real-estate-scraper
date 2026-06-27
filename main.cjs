@@ -3,17 +3,32 @@ const fs = require('fs');
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 // const createCsvStringifier = require('csv-writer').createObjectCsvStringifier;
 
+// Prevent ProtocolError (e.g. Network.enable timed out) from crashing the process.
+// These errors are fired asynchronously by Puppeteer internals and bypass try/catch.
+process.on('uncaughtException', (err) => {
+	console.error(`[uncaughtException – continuing] ${err.message}`);
+});
+process.on('unhandledRejection', (reason) => {
+	console.error(`[unhandledRejection – continuing] ${reason}`);
+});
+
 // Parse command line arguments
 const args = process.argv.slice(2);
-if (args.length === 0 || !['rent', 'sale'].includes(args[0])) {
-	console.log('Usage: node main.cjs [rent|sale]');
+const mode = args.find((arg) => ['rent', 'sale'].includes(arg));
+const fsboOnly = args.includes('--fsbo') || args.includes('fsbo');
+
+if (!mode) {
+	console.log('Usage: node main.cjs [rent|sale] [--fsbo]');
 	console.log('  rent - scrape rental properties');
 	console.log('  sale - scrape sale properties');
+	console.log('  --fsbo - only write listings marked as FSBO');
 	process.exit(1);
 }
 
-const type = args[0] === 'rent' ? 'for-rent' : 'for-sale';
-console.log(`Starting scraper for ${type} properties...`);
+const type = mode === 'rent' ? 'for-rent' : 'for-sale';
+console.log(
+	`Starting scraper for ${type} properties${fsboOnly ? ' (FSBO only)' : ''}...`,
+);
 
 const maxArea = 1200;
 const areaStep = 20;
@@ -33,6 +48,8 @@ function delay(ms) {
 function isDetachableOrTransientError(err) {
 	const msg = (err && err.message ? err.message : String(err)).toLowerCase();
 	return (
+		msg.includes('frame was detached') ||
+		msg.includes('navigating frame was detached') ||
 		msg.includes('detached frame') ||
 		msg.includes('target closed') ||
 		msg.includes('session closed') ||
@@ -40,14 +57,77 @@ function isDetachableOrTransientError(err) {
 		msg.includes('execution context was destroyed') ||
 		msg.includes('browser has disconnected') ||
 		msg.includes('cannot find context') ||
-		msg.includes('timeout') // treat timeouts as transient
+		msg.includes('timeout') || // treat timeouts as transient
+		msg.includes('protocolerror') ||
+		msg.includes('protocol error') ||
+		msg.includes('network.enable')
 	);
 }
 
-async function recreatePage(browser) {
-	const p = await browser.newPage();
-	await p.setUserAgent(USER_AGENT);
-	return p;
+function isBrowserConnectionClosedError(err) {
+	const msg = (err && err.message ? err.message : String(err)).toLowerCase();
+	return (
+		msg.includes('connection closed') ||
+		msg.includes('browser has disconnected') ||
+		msg.includes('target closed') ||
+		msg.includes('session closed')
+	);
+}
+
+async function launchBrowser() {
+	return puppeteer.launch({
+		headless: true,
+		defaultViewport: { width: 1920, height: 1080 },
+		protocolTimeout: 300000, // 5 minutes – avoids Network.enable timeout crashes
+	});
+}
+
+async function recoverBrowserAndPages(browser) {
+	console.warn('Recovering browser after CDP connection loss...');
+	try {
+		if (browser) {
+			await browser.close();
+		}
+	} catch (_) {
+		// ignore close failures when browser is already dead
+	}
+
+	const nextBrowser = await launchBrowser();
+	const nextPage = await nextBrowser.newPage();
+	const nextPropertyPage = await nextBrowser.newPage();
+
+	await nextPage.setUserAgent(USER_AGENT);
+	await nextPropertyPage.setUserAgent(USER_AGENT);
+
+	nextPage.setDefaultNavigationTimeout(60000);
+	nextPropertyPage.setDefaultNavigationTimeout(60000);
+
+	return {
+		browser: nextBrowser,
+		page: nextPage,
+		propertyPage: nextPropertyPage,
+	};
+}
+
+async function recreatePage(browser, maxRetries = 3) {
+	if (!browser || !browser.isConnected()) {
+		throw new Error('Browser is disconnected');
+	}
+
+	for (let attempt = 1; attempt <= maxRetries; attempt++) {
+		try {
+			const p = await browser.newPage();
+			await p.setUserAgent(USER_AGENT);
+			return p;
+		} catch (err) {
+			console.warn(`recreatePage attempt ${attempt} failed: ${err.message}`);
+			if (isBrowserConnectionClosedError(err)) {
+				throw new Error('Browser is disconnected');
+			}
+			if (attempt === maxRetries) throw err;
+			await delay(1000 * attempt);
+		}
+	}
 }
 
 // Robust navigation that retries and recreates the page if needed.
@@ -66,8 +146,8 @@ async function safeGoto(page, url, options, browser, maxRetries = 3) {
 
 			// If frame/page got detached or target closed, recreate the page
 			const shouldRecreate =
-				/detached frame|target closed|session closed|page crashed|browser has disconnected|execution context was destroyed|cannot find context/i.test(
-					err?.message || ''
+				/frame was detached|navigating frame was detached|detached frame|target closed|session closed|page crashed|browser has disconnected|execution context was destroyed|cannot find context|protocolerror|protocol error|network\.enable/i.test(
+					err?.message || '',
 				);
 
 			if (shouldRecreate) {
@@ -84,6 +164,82 @@ async function safeGoto(page, url, options, browser, maxRetries = 3) {
 		}
 	}
 	// Exhausted retries
+	throw lastError;
+}
+
+// Wait for property page readiness with retries. It tries to wait for
+// either AT_HOME_APP data or a reasonable DOM element and tolerates
+// transient errors by recreating the page and reloading the URL.
+async function waitForPropertyReady(page, url, browser, maxRetries = 3) {
+	let lastError;
+	for (let attempt = 1; attempt <= maxRetries; attempt++) {
+		try {
+			// Prefer structured data when available
+			await page.waitForFunction(
+				() => Boolean(window.AT_HOME_APP?.preloadedState?.listing),
+				{ timeout: 15000 },
+			);
+			return page;
+		} catch (err) {
+			lastError = err;
+			// Try fallback DOM readiness quickly
+			try {
+				await page.waitForSelector('body', { timeout: 5000 });
+				return page;
+			} catch (_) {
+				// ignore and treat as transient below
+			}
+
+			if (!isDetachableOrTransientError(err)) {
+				throw err;
+			}
+
+			// Recreate and reload URL
+			try {
+				await page.close({ runBeforeUnload: false });
+			} catch (_) {
+				// ignore
+			}
+			page = await recreatePage(browser);
+			await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+			await delay(500 * attempt);
+		}
+	}
+	throw lastError;
+}
+
+// Evaluate on a property page with retries. If evaluation fails due to
+// transient errors or context loss, it will reload and retry. Returns
+// an object { result, page } where page may be a newly recreated page.
+async function safeEvaluateOnProperty(
+	page,
+	url,
+	evalFn,
+	arg,
+	browser,
+	maxRetries = 3,
+) {
+	let lastError;
+	for (let attempt = 1; attempt <= maxRetries; attempt++) {
+		try {
+			// Ensure page appears ready before evaluating
+			await waitForPropertyReady(page, url, browser, 2);
+			const result = await page.evaluate(evalFn, arg);
+			return { result, page };
+		} catch (err) {
+			lastError = err;
+			if (!isDetachableOrTransientError(err)) {
+				throw err;
+			}
+			// Recreate and reload
+			try {
+				await page.close({ runBeforeUnload: false });
+			} catch (_) {}
+			page = await recreatePage(browser);
+			await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+			await delay(500 * attempt);
+		}
+	}
 	throw lastError;
 }
 
@@ -158,10 +314,7 @@ async function scrapeAtHomeLu() {
 	// Read existing URLs to avoid duplicates
 	await readExistingUrls();
 
-	const browser = await puppeteer.launch({
-		headless: true,
-		defaultViewport: { width: 1920, height: 1080 },
-	});
+	let browser = await launchBrowser();
 
 	// Check if CSV file exists to determine if we need to write headers
 	const csvExists = fs.existsSync(outFileName);
@@ -208,8 +361,19 @@ async function scrapeAtHomeLu() {
 		await page.setUserAgent(USER_AGENT);
 		await propertyPage.setUserAgent(USER_AGENT);
 
+		// Be generous with nav timeouts to reduce false failures
+		page.setDefaultNavigationTimeout(60000);
+		propertyPage.setDefaultNavigationTimeout(60000);
+
 		for (let area = 0; area <= maxArea; area += areaStep) {
 			for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+				if (!browser.isConnected()) {
+					const recovered = await recoverBrowserAndPages(browser);
+					browser = recovered.browser;
+					page = recovered.page;
+					propertyPage = recovered.propertyPage;
+				}
+
 				const toArea = area + areaStep - 1;
 				// q=faee1a4a means Luxembourg only
 				const pageUrl = `https://www.athome.lu/${
@@ -218,7 +382,7 @@ async function scrapeAtHomeLu() {
 					type == 'for-sale' ? 'buy' : 'rent'
 				}&q=faee1a4a&page=${pageNum}&srf_min=${area}&srf_max=${toArea}`;
 				console.log(
-					`${new Date().toISOString()} : Navigating to page ${pageNum} for area ${area} - ${toArea} m²: ${pageUrl}`
+					`${new Date().toISOString()} : Navigating to page ${pageNum} for area ${area} - ${toArea} m²: ${pageUrl}`,
 				);
 
 				try {
@@ -229,7 +393,7 @@ async function scrapeAtHomeLu() {
 							waitUntil: 'networkidle2',
 							timeout: 30000,
 						},
-						browser
+						browser,
 					);
 
 					// Wait for the page to load completely
@@ -273,14 +437,14 @@ async function scrapeAtHomeLu() {
 					});
 
 					console.log(
-						`Found ${filteredLinks.length} new URLs to scrape on this page`
+						`Found ${filteredLinks.length} new URLs to scrape on this page`,
 					);
 
 					// Process each property link immediately
 					for (const propertyLink of filteredLinks) {
 						totalPropertyCount++;
 						console.log(
-							`${new Date().toISOString()} : Processing listing ${totalPropertyCount}: ${propertyLink}`
+							`${new Date().toISOString()} : Processing listing ${totalPropertyCount}: ${propertyLink}`,
 						);
 
 						try {
@@ -288,10 +452,11 @@ async function scrapeAtHomeLu() {
 								propertyPage,
 								propertyLink,
 								{
-									waitUntil: 'networkidle2',
-									timeout: 30000,
+									// Property detail pages are SPA-like; DOMContentLoaded is more reliable
+									waitUntil: 'domcontentloaded',
+									timeout: 45000,
 								},
-								browser
+								browser,
 							);
 
 							// Wait for the page to load completely
@@ -306,6 +471,12 @@ async function scrapeAtHomeLu() {
 							// });
 
 							// Extract property data from structured JSON data
+							await waitForPropertyReady(
+								propertyPage,
+								propertyLink,
+								browser,
+								3,
+							);
 							const propertyInfo = await propertyPage.evaluate((url) => {
 								// Initialize data structure
 								const data = {
@@ -338,7 +509,7 @@ async function scrapeAtHomeLu() {
 
 									// Look for "De X € à Y €" pattern for price ranges
 									const priceRangeMatch = bodyText.match(
-										/De\s+(\d+(?:\s*\d+)*)\s*€\s+à\s+(\d+(?:\s*\d+)*)\s*€/i
+										/De\s+(\d+(?:\s*\d+)*)\s*€\s+à\s+(\d+(?:\s*\d+)*)\s*€/i,
 									);
 									if (priceRangeMatch) {
 										data.priceFrom = priceRangeMatch[1].replace(/\s+/g, '');
@@ -347,7 +518,7 @@ async function scrapeAtHomeLu() {
 
 									// Look for "De X à Y m²" pattern for area ranges
 									const areaRangeMatch = bodyText.match(
-										/De\s+(\d+(?:\s*\d+)*)\s+à\s+(\d+(?:\s*\d+)*)\s*m[²2]/i
+										/De\s+(\d+(?:\s*\d+)*)\s+à\s+(\d+(?:\s*\d+)*)\s*m[²2]/i,
 									);
 									if (areaRangeMatch) {
 										data.areaFrom = areaRangeMatch[1].replace(/\s+/g, '');
@@ -362,7 +533,7 @@ async function scrapeAtHomeLu() {
 
 									if (!appData && !appDataOld) {
 										console.log(
-											'No structured data found, but may have extracted range data, falling back to DOM scraping'
+											'No structured data found, but may have extracted range data, falling back to DOM scraping',
 										);
 										throw new Error('No structured data available');
 									}
@@ -442,7 +613,7 @@ async function scrapeAtHomeLu() {
 									// FSBO detection - only mark as FSBO if it's actually a private seller
 									// Look for private class indicators
 									const privateElements = document.querySelectorAll(
-										'[class*="private-"]'
+										'[class*="private-"]',
 									);
 									if (privateElements.length > 0) {
 										// Found elements with private-* classes, extract the class name
@@ -500,7 +671,7 @@ async function scrapeAtHomeLu() {
 									// Extract property type from URL
 									// URL format: https://www.athome.lu/fr/[vente|location]/[type]/mons/id-8779150.html
 									const urlMatch = url.match(
-										/\/(?:vente|location)\/([^\/]+)\//
+										/\/(?:vente|location)\/([^\/]+)\//,
 									);
 									if (urlMatch) {
 										data.type = urlMatch[1];
@@ -508,13 +679,13 @@ async function scrapeAtHomeLu() {
 
 									console.log(
 										'Successfully extracted structured data. location:',
-										data.location
+										data.location,
 									);
 									return data;
 								} catch (error) {
 									console.log(
 										'Structured data extraction failed, falling back to DOM scraping:',
-										error.message
+										error.message,
 									);
 
 									// Fallback to original DOM scraping method
@@ -535,7 +706,7 @@ async function scrapeAtHomeLu() {
 
 									// Look for "De X € à Y €" pattern for price ranges
 									const priceRangeMatch = bodyText.match(
-										/De\s+(\d+(?:\s*\d+)*)\s*€\s+à\s+(\d+(?:\s*\d+)*)\s*€/i
+										/De\s+(\d+(?:\s*\d+)*)\s*€\s+à\s+(\d+(?:\s*\d+)*)\s*€/i,
 									);
 									if (priceRangeMatch) {
 										data.priceFrom = priceRangeMatch[1].replace(/\s+/g, '');
@@ -544,7 +715,7 @@ async function scrapeAtHomeLu() {
 
 									// Look for "De X à Y m²" pattern for area ranges
 									const areaRangeMatch = bodyText.match(
-										/De\s+(\d+(?:\s*\d+)*)\s+à\s+(\d+(?:\s*\d+)*)\s*m[²2]/i
+										/De\s+(\d+(?:\s*\d+)*)\s+à\s+(\d+(?:\s*\d+)*)\s*m[²2]/i,
 									);
 									if (areaRangeMatch) {
 										data.areaFrom = areaRangeMatch[1].replace(/\s+/g, '');
@@ -564,7 +735,7 @@ async function scrapeAtHomeLu() {
 												.replace(/\s+/g, ' ')
 												.trim();
 											const rangeMatch = cleanPriceText.match(
-												/(\d+(?:\s+\d+)*)\s*€.*?(\d+(?:\s+\d+)*)\s*€/
+												/(\d+(?:\s+\d+)*)\s*€.*?(\d+(?:\s+\d+)*)\s*€/,
 											);
 											if (rangeMatch) {
 												data.priceFrom = rangeMatch[1].replace(/\s+/g, '');
@@ -575,7 +746,7 @@ async function scrapeAtHomeLu() {
 												if (singlePriceMatch) {
 													data.priceFrom = singlePriceMatch[1].replace(
 														/\s+/g,
-														''
+														'',
 													);
 												}
 											}
@@ -615,7 +786,7 @@ async function scrapeAtHomeLu() {
 											getTextContent('[class*="area"]') ||
 											getTextContent('.property-surface') ||
 											document.body.textContent.match(
-												/(\d+(?:\s+\d+)*)\s*m[²2]/
+												/(\d+(?:\s+\d+)*)\s*m[²2]/,
 											)?.[0] ||
 											'';
 
@@ -624,19 +795,19 @@ async function scrapeAtHomeLu() {
 												.replace(/\s+/g, ' ')
 												.trim();
 											const areaRangeMatch = cleanSurfaceText.match(
-												/(\d+(?:\s+\d+)*)\s*m[²2].*?(\d+(?:\s+\d+)*)\s*m[²2]/
+												/(\d+(?:\s+\d+)*)\s*m[²2].*?(\d+(?:\s+\d+)*)\s*m[²2]/,
 											);
 											if (areaRangeMatch) {
 												data.areaFrom = areaRangeMatch[1].replace(/\s+/g, '');
 												data.areaTo = areaRangeMatch[2].replace(/\s+/g, '');
 											} else {
 												const singleAreaMatch = cleanSurfaceText.match(
-													/(\d+(?:\s+\d+)*)\s*m[²2]/
+													/(\d+(?:\s+\d+)*)\s*m[²2]/,
 												);
 												if (singleAreaMatch) {
 													data.areaFrom = singleAreaMatch[1].replace(
 														/\s+/g,
-														''
+														'',
 													);
 												}
 											}
@@ -659,7 +830,7 @@ async function scrapeAtHomeLu() {
 										getTextContent('[href^="tel:"]') ||
 										getTextContent('.contact-phone') ||
 										document.body.textContent.match(
-											/(\+?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3})/
+											/(\+?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3}[\s\-]?\d{2,3})/,
 										)?.[0] ||
 										'';
 
@@ -667,7 +838,7 @@ async function scrapeAtHomeLu() {
 									data.contactEmail =
 										getAttribute('a[href^="mailto:"]', 'href')?.replace(
 											'mailto:',
-											''
+											'',
 										) ||
 										getTextContent('a[href^="mailto:"]') ||
 										getTextContent('[class*="email"]') ||
@@ -675,7 +846,7 @@ async function scrapeAtHomeLu() {
 										getTextContent('.agency-email') ||
 										(() => {
 											const emailMatches = document.body.textContent.match(
-												/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g
+												/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g,
 											);
 											return emailMatches ? emailMatches[0] : '';
 										})() ||
@@ -684,7 +855,7 @@ async function scrapeAtHomeLu() {
 									// Clean up email
 									if (data.contactEmail) {
 										const emailMatch = data.contactEmail.match(
-											/^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/
+											/^([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/,
 										);
 										if (emailMatch) {
 											data.contactEmail = emailMatch[1];
@@ -694,7 +865,7 @@ async function scrapeAtHomeLu() {
 									// FSBO detection for fallback method - only mark as FSBO if it's actually a private seller
 
 									const privateElements = document.querySelectorAll(
-										'[class*="private-"]'
+										'[class*="private-"]',
 									);
 									if (privateElements.length > 0) {
 										// Found elements with private-* classes, extract the class name
@@ -799,7 +970,7 @@ async function scrapeAtHomeLu() {
 									// Extract type from URL in fallback mode
 									// URL format: https://www.athome.lu/fr/[vente|location]/[type]/mons/id-8779150.html
 									const urlMatch = url.match(
-										/\/(?:vente|location)\/([^\/]+)\//
+										/\/(?:vente|location)\/([^\/]+)\//,
 									);
 									if (urlMatch) {
 										data.type = urlMatch[1];
@@ -831,16 +1002,24 @@ async function scrapeAtHomeLu() {
 								}
 							});
 
-							// Write this property's data immediately to CSV
-							await csvWriter.writeRecords([propertyInfo]);
-							totalRecordsWritten++;
+							if (!fsboOnly || propertyInfo.fsbo) {
+								// Write this property's data immediately to CSV
+								await csvWriter.writeRecords([propertyInfo]);
+								totalRecordsWritten++;
+
+								if (fsboOnly) {
+									console.log(
+										`${new Date().toISOString()} FSBO record found (${totalRecordsWritten} total records written)`,
+									);
+								}
+							}
 
 							// Small delay to be respectful to the server
 							await new Promise((resolve) => setTimeout(resolve, 400));
 						} catch (error) {
 							console.error(
 								`Error processing property ${propertyLink}:`,
-								error
+								error,
 							);
 							// Add empty record to maintain count
 							const errorRecord = {
@@ -867,30 +1046,50 @@ async function scrapeAtHomeLu() {
 								energyClass: '',
 							};
 
-							// Write error record immediately to CSV
-							await csvWriter.writeRecords([errorRecord]);
-							totalRecordsWritten++;
+							if (!fsboOnly) {
+								// Write error record immediately to CSV
+								await csvWriter.writeRecords([errorRecord]);
+								totalRecordsWritten++;
 
-							console.log(
-								`Error record written for property ${totalPropertyCount} (${totalRecordsWritten} total records written)`
-							);
+								console.log(
+									`Error record written for property ${totalPropertyCount} (${totalRecordsWritten} total records written)`,
+								);
+							}
 							continue; // Continue with next property if this one fails
 						}
 					}
 				} catch (error) {
 					console.error(`Error on page ${pageNum} for area ${area}m²:`, error);
+					if (isBrowserConnectionClosedError(error)) {
+						try {
+							const recovered = await recoverBrowserAndPages(browser);
+							browser = recovered.browser;
+							page = recovered.page;
+							propertyPage = recovered.propertyPage;
+							pageNum--; // Retry this page after browser recovery
+							continue;
+						} catch (recoverErr) {
+							console.error('Browser recovery failed:', recoverErr);
+						}
+					}
 					continue; // Continue with next page if this one fails
 				}
 			}
 		}
 
 		console.log(
-			`Scraping completed! Processed ${totalPropertyCount} properties and wrote ${totalRecordsWritten} records to ${outFileName}`
+			`Scraping completed! Processed ${totalPropertyCount} properties and wrote ${totalRecordsWritten} records to ${outFileName}`,
 		);
 	} catch (error) {
 		console.error('Error occurred:', error);
 	} finally {
-		await browser.close();
+		try {
+			if (browser) {
+				await browser.close();
+			}
+		} catch (_) {
+			// ignore close errors on disconnected browser
+		}
 		// console.log('Browser closed.');
 	}
 }
