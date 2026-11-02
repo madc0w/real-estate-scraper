@@ -348,6 +348,11 @@ async function scrapeAtHomeLu() {
 		encoding: 'utf8', // Ensure proper encoding
 	});
 
+	// Create the file (with headers) up front, since in FSBO mode it may take a long time before the first match
+	if (!csvExists) {
+		await csvWriter.writeRecords([]);
+	}
+
 	let totalRecordsWritten = 0;
 	let totalPropertyCount = 0;
 
