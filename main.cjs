@@ -616,11 +616,15 @@ async function scrapeAtHomeLu() {
 									}
 
 									// FSBO detection - only mark as FSBO if it's actually a private seller
-									// Look for private class indicators
+									// The site's structured data flags private sellers directly
+									if (appDataOld?.transaction?.is_private_seller === true) {
+										data.fsbo = 'particulier';
+									}
+									// Legacy markup: elements with private-* classes
 									const privateElements = document.querySelectorAll(
 										'[class*="private-"]',
 									);
-									if (privateElements.length > 0) {
+									if (!data.fsbo && privateElements.length > 0) {
 										// Found elements with private-* classes, extract the class name
 										for (let element of privateElements) {
 											const classes = element.className.split(' ');
@@ -868,11 +872,17 @@ async function scrapeAtHomeLu() {
 									}
 
 									// FSBO detection for fallback method - only mark as FSBO if it's actually a private seller
+									if (
+										window.AT_HOME_APP?.preloadedState?.listing?.listingOld
+											?.transaction?.is_private_seller === true
+									) {
+										data.fsbo = 'particulier';
+									}
 
 									const privateElements = document.querySelectorAll(
 										'[class*="private-"]',
 									);
-									if (privateElements.length > 0) {
+									if (!data.fsbo && privateElements.length > 0) {
 										// Found elements with private-* classes, extract the class name
 										for (let element of privateElements) {
 											const classes = element.className.split(' ');
